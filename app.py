@@ -15,7 +15,7 @@ if not DATA_PATH.exists():
     st.stop()
 DATA = json.loads(DATA_PATH.read_text(encoding='utf-8'))
 CITIES = {row['ville']: row for row in DATA}
-st.title('🏠 Zero to Host — V2.4 pilote')
+st.title('🏠 Zero to Host — V2.5 pilote')
 st.caption('Carte, adresses, trajets, comparaison des villes et rapport PDF · sans dépendance à Overpass')
 st.warning('Prototype autonome : ne remplace pas votre application actuelle. Ne constitue pas un avis juridique.')
 city = st.selectbox('Choisir une ville', sorted(CITIES))
@@ -224,50 +224,66 @@ with st.expander('Option complémentaire : importer des lieux vérifiés par CSV
         except (ValueError, pd.errors.ParserError, UnicodeDecodeError):
             st.error('Impossible de lire ce CSV. Vérifie le séparateur et les colonnes.')
 
-# V2.4 : comparaison fondée sur des fiches réellement récupérées, jamais sur des données inventées.
+# V2.5 : comparer les sources documentaires sans confondre couverture et potentiel Airbnb.
 st.divider()
-st.subheader('📊 Comparer Leonberg, Ditzingen et Rutesheim')
-st.caption('Indicateur pédagogique de présence documentée : Wikidata est incomplet. Ce score ne prédit ni les réservations, ni le taux d’occupation, ni le potentiel économique Airbnb. Les villes ne sont comparées que si les trois recherches réussissent.')
+st.subheader('📊 Comparaison des trois villes — infrastructures documentées')
+st.caption('Wikidata est partiel. Les fiches et catégories identifiées ne constituent ni un indice de demande Airbnb, ni une note d’investissement. Le même rayon est appliqué aux trois villes.')
+CATEGORY_WEIGHTS = {'Hôpital': 20, 'Gare ferroviaire': 25, 'Hôtel': 15, 'Université': 15, 'Musée': 10, 'Attraction touristique': 15}
 
-CATEGORY_WEIGHTS = {
-    'Hôpital': 20,
-    'Gare ferroviaire': 25,
-    'Hôtel': 15,
-    'Université': 15,
-    'Musée': 10,
-    'Attraction touristique': 15,
-}
-
-def documented_score(items):
-    """Score de présence, plafonné à 100 ; un résultat absent reste inconnu."""
-    present = {r['categorie'] for r in items}
-    return sum(weight for category, weight in CATEGORY_WEIGHTS.items() if category in present)
+def distance_km(lat1, lon1, lat2, lon2):
+    import math
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = p2-p1
+    dl = math.radians(lon2-lon1)
+    h = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+    return 6371.0088 * 2 * math.asin(min(1, math.sqrt(h)))
 
 comparison_radius = st.slider('Rayon identique pour comparer les villes (km)', 2, 15, 7, key='comparison_radius')
 if st.button('📊 Comparer les trois villes (Wikidata)', key='compare_cities'):
-    compared = []
+    compared, details = [], []
     with st.spinner('Recherche des établissements documentés pour chaque ville…'):
         for name, (lat, lon) in PILOT_CENTERS.items():
             entries = wikidata_pois(lat, lon, comparison_radius)
             if entries is None:
-                compared.append({'Ville': name, 'Recherche': 'Indisponible', 'Fiches Wikidata': None, 'Score documentaire / 100': None, 'Catégories présentes / 6': None})
-            else:
-                compared.append({'Ville': name, 'Recherche': 'Résultats partiels', 'Fiches Wikidata': len({r['identifiant'] for r in entries}), 'Score documentaire / 100': documented_score(entries), 'Catégories présentes / 6': len({r['categorie'] for r in entries})})
-    st.session_state['v24_comparison'] = compared
-    st.session_state['v24_comparison_radius'] = comparison_radius
+                compared.append({'Ville': name, 'Recherche': 'Indisponible', 'Fiches uniques': None, 'Catégories documentées / 6': None, 'Présence pondérée / 100': None})
+                continue
+            categories = {r['categorie'] for r in entries}
+            unique_ids = {r['identifiant'] for r in entries}
+            score = sum(w for c,w in CATEGORY_WEIGHTS.items() if c in categories)
+            compared.append({'Ville': name, 'Recherche': 'Résultats partiels', 'Fiches uniques': len(unique_ids), 'Catégories documentées / 6': len(categories), 'Présence pondérée / 100': score})
+            for r in entries:
+                details.append({'Ville': name, 'Catégorie': r['categorie'], 'Établissement': r['nom'], 'Distance du centre (km)': round(distance_km(lat, lon, r['lat'], r['lon']), 2), 'Source': r['source'], 'Identifiant': r['identifiant']})
+    st.session_state['v25_comparison'] = compared
+    st.session_state['v25_details'] = details
+    st.session_state['v25_comparison_radius'] = comparison_radius
 
-comparison = st.session_state.get('v24_comparison')
-if comparison and st.session_state.get('v24_comparison_radius') == comparison_radius:
+comparison = st.session_state.get('v25_comparison')
+if comparison and st.session_state.get('v25_comparison_radius') == comparison_radius:
     comparison_df = pd.DataFrame(comparison)
     st.dataframe(comparison_df, hide_index=True, use_container_width=True)
-    st.download_button('📥 Télécharger la comparaison CSV', comparison_df.to_csv(index=False).encode('utf-8-sig'), file_name='zero_to_host_comparaison_v24.csv', mime='text/csv')
-    if comparison_df['Score documentaire / 100'].notna().all():
-        st.bar_chart(comparison_df.set_index('Ville')['Score documentaire / 100'])
+    st.download_button('📥 Télécharger la comparaison CSV', comparison_df.to_csv(index=False).encode('utf-8-sig'), file_name='zero_to_host_comparaison_v25.csv', mime='text/csv')
+    st.caption('Présence pondérée : 25 points pour au moins une gare, 20 pour un hôpital, 15 pour un hôtel, 15 pour une université, 10 pour un musée et 15 pour une attraction. Un résultat absent signifie seulement « non trouvé dans Wikidata ».')
+    details_df = pd.DataFrame(st.session_state.get('v25_details', []))
+    if not details_df.empty:
+        st.subheader('🏥🚉🏨 Établissements et distances')
+        st.caption('Distances à vol d’oiseau depuis le centre approximatif de chaque ville, et non depuis le logement. Les fiches peuvent apparaître dans plusieurs villes si leurs rayons se chevauchent.')
+        city_filter = st.selectbox('Afficher les établissements de', ['Toutes les villes'] + list(PILOT_CENTERS), key='detail_city')
+        show = details_df if city_filter == 'Toutes les villes' else details_df[details_df['Ville'] == city_filter]
+        st.dataframe(show[['Ville','Catégorie','Établissement','Distance du centre (km)','Source']], hide_index=True, use_container_width=True, column_config={'Source': st.column_config.LinkColumn('Fiche Wikidata')})
+        st.download_button('📥 Télécharger les établissements et distances CSV', details_df.to_csv(index=False).encode('utf-8-sig'), file_name='zero_to_host_etablissements_v25.csv', mime='text/csv')
+    if comparison_df['Présence pondérée / 100'].notna().all():
+        st.bar_chart(comparison_df.set_index('Ville')['Présence pondérée / 100'])
     else:
-        st.warning('Au moins une recherche a échoué : comparaison incomplète, aucun score fictif.')
-    st.caption('Méthode : 25 points si au moins une gare est référencée, 20 pour un hôpital, 15 pour un hôtel, 15 pour une université, 10 pour un musée et 15 pour une attraction. Aucun point supplémentaire pour les quantités. Un zéro signifie uniquement « aucune fiche trouvée dans cette recherche », jamais « aucun établissement existant ».')
+        st.warning('Recherche incomplète : les valeurs indisponibles ne sont pas remplacées par zéro.')
 else:
     st.info('Lance la comparaison pour afficher les trois villes avec le même rayon.')
+
+st.divider()
+st.subheader('🧭 Les trois dimensions de la décision Airbnb')
+st.markdown('**1. Emplacement :** établissements documentés, distances et accessibilité. Ces données sont des indices de contexte, pas des réservations.')
+st.markdown('**2. Rentabilité :** prix par nuit, occupation, loyer et coûts renseignés par toi dans le calculateur ci-dessous. Les hypothèses doivent être confrontées à des annonces comparables.')
+st.markdown('**3. Réglementation :** vérifier la Zweckentfremdungssatzung, la Nutzungsänderung et l’accord écrit du propriétaire avant de signer.')
+st.info('Conclusion automatique d’investissement : non disponible. Une décision nécessite des comparables locatifs, des estimations de revenus sourcées et une vérification juridique locale.')
 
 st.divider()
 st.subheader('Zweckentfremdungssatzung')
@@ -323,7 +339,7 @@ def build_pdf_report():
     output = io.BytesIO()
     doc = SimpleDocTemplate(output, pagesize=(595, 842), rightMargin=42, leftMargin=42, topMargin=45, bottomMargin=45)
     styles = getSampleStyleSheet()
-    story = [Paragraph('Zero to Host - Rapport de localisation V2.4', styles['Title']), Spacer(1, 12)]
+    story = [Paragraph('Zero to Host - Rapport de localisation V2.5', styles['Title']), Spacer(1, 12)]
     def line(label, value):
         story.append(Paragraph(f'<b>{escape(str(label))} :</b> {escape(str(value))}', styles['BodyText']))
         story.append(Spacer(1, 6))
@@ -344,12 +360,12 @@ def build_pdf_report():
         ('Resultat mensuel estime (EUR)', f'{profit:.2f}')
     ]:
         line(label, val)
-    if comparison and st.session_state.get('v24_comparison_radius') == comparison_radius:
-        story.append(Paragraph('Comparaison documentaire des trois villes', styles['Heading2']))
+    if comparison and st.session_state.get('v25_comparison_radius') == comparison_radius:
+        story.append(Paragraph('Comparaison des infrastructures documentees', styles['Heading2']))
         line('Rayon de recherche (km)', comparison_radius)
-        rows = [['Ville', 'Fiches', 'Score / 100', 'Recherche']]
+        rows = [['Ville', 'Fiches', 'Présence / 100', 'Recherche']]
         for r in comparison:
-            rows.append([str(r['Ville']), str(r['Fiches Wikidata'] if r['Fiches Wikidata'] is not None else 'N/D'), str(r['Score documentaire / 100'] if r['Score documentaire / 100'] is not None else 'N/D'), r['Recherche']])
+            rows.append([str(r['Ville']), str(r['Fiches uniques'] if r['Fiches uniques'] is not None else 'N/D'), str(r['Présence pondérée / 100'] if r['Présence pondérée / 100'] is not None else 'N/D'), r['Recherche']])
         t = Table(rows, colWidths=[110, 70, 100, 160], repeatRows=1)
         t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#e9eef6')),('GRID',(0,0),(-1,-1),0.4,colors.grey),('VALIGN',(0,0),(-1,-1),'TOP'),('FONTSIZE',(0,0),(-1,-1),9),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
         story.append(t)
@@ -361,10 +377,10 @@ def build_pdf_report():
 
 try:
     pdf_bytes = build_pdf_report()
-    st.download_button('📄 Télécharger le rapport PDF V2.4', pdf_bytes, file_name=f'zero_to_host_v24_{city.lower()}.pdf', mime='application/pdf')
+    st.download_button('📄 Télécharger le rapport PDF V2.5', pdf_bytes, file_name=f'zero_to_host_v25_{city.lower()}.pdf', mime='application/pdf')
 except ImportError:
     st.error('Pour activer le PDF, ajoute reportlab dans requirements.txt de ton dépôt GitHub.')
 except Exception as exc:
     st.error('Le PDF n’a pas pu être généré. Vérifie les données et les journaux Streamlit.')
 
-st.info('Prochaine étape : base de lieux documentés plus complète, entreprises et zones d’activité, puis extension progressive à d’autres villes. Les données Wikidata ne remplacent pas une étude du marché Airbnb.')
+st.info('Prochaine étape : loyers locaux et annonces comparables vérifiées. Aucune estimation de marché Airbnb ne sera inventée.')
