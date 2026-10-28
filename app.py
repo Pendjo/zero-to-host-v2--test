@@ -9,10 +9,14 @@ from pathlib import Path
 import streamlit as st
 
 st.set_page_config(page_title="Zero to Host | Pilote V2", page_icon="🏠", layout="wide")
-DATA = json.loads((Path(__file__).parent / 'data' / 'villes.json').read_text(encoding='utf-8'))
+DATA_PATH = Path(__file__).parent / 'data' / 'villes.json'
+if not DATA_PATH.exists():
+    st.error('Fichier manquant : data/villes.json. Conserve le dossier data de la V2.3 dans ton dépôt GitHub.')
+    st.stop()
+DATA = json.loads(DATA_PATH.read_text(encoding='utf-8'))
 CITIES = {row['ville']: row for row in DATA}
-st.title('🏠 Zero to Host — V2.3 pilote')
-st.caption('Carte, adresses, trajets et données vérifiables · sans dépendance à Overpass')
+st.title('🏠 Zero to Host — V2.4 pilote')
+st.caption('Carte, adresses, trajets, comparaison des villes et rapport PDF · sans dépendance à Overpass')
 st.warning('Prototype autonome : ne remplace pas votre application actuelle. Ne constitue pas un avis juridique.')
 city = st.selectbox('Choisir une ville', sorted(CITIES))
 address = st.text_input('Adresse du bien (facultative)', placeholder='Rue et numéro, code postal')
@@ -219,6 +223,52 @@ with st.expander('Option complémentaire : importer des lieux vérifiés par CSV
                     st.dataframe(poi[['categorie','nom','source','date_verification']], hide_index=True, use_container_width=True)
         except (ValueError, pd.errors.ParserError, UnicodeDecodeError):
             st.error('Impossible de lire ce CSV. Vérifie le séparateur et les colonnes.')
+
+# V2.4 : comparaison fondée sur des fiches réellement récupérées, jamais sur des données inventées.
+st.divider()
+st.subheader('📊 Comparer Leonberg, Ditzingen et Rutesheim')
+st.caption('Indicateur pédagogique de présence documentée : Wikidata est incomplet. Ce score ne prédit ni les réservations, ni le taux d’occupation, ni le potentiel économique Airbnb. Les villes ne sont comparées que si les trois recherches réussissent.')
+
+CATEGORY_WEIGHTS = {
+    'Hôpital': 20,
+    'Gare ferroviaire': 25,
+    'Hôtel': 15,
+    'Université': 15,
+    'Musée': 10,
+    'Attraction touristique': 15,
+}
+
+def documented_score(items):
+    """Score de présence, plafonné à 100 ; un résultat absent reste inconnu."""
+    present = {r['categorie'] for r in items}
+    return sum(weight for category, weight in CATEGORY_WEIGHTS.items() if category in present)
+
+comparison_radius = st.slider('Rayon identique pour comparer les villes (km)', 2, 15, 7, key='comparison_radius')
+if st.button('📊 Comparer les trois villes (Wikidata)', key='compare_cities'):
+    compared = []
+    with st.spinner('Recherche des établissements documentés pour chaque ville…'):
+        for name, (lat, lon) in PILOT_CENTERS.items():
+            entries = wikidata_pois(lat, lon, comparison_radius)
+            if entries is None:
+                compared.append({'Ville': name, 'Recherche': 'Indisponible', 'Fiches Wikidata': None, 'Score documentaire / 100': None, 'Catégories présentes / 6': None})
+            else:
+                compared.append({'Ville': name, 'Recherche': 'Résultats partiels', 'Fiches Wikidata': len({r['identifiant'] for r in entries}), 'Score documentaire / 100': documented_score(entries), 'Catégories présentes / 6': len({r['categorie'] for r in entries})})
+    st.session_state['v24_comparison'] = compared
+    st.session_state['v24_comparison_radius'] = comparison_radius
+
+comparison = st.session_state.get('v24_comparison')
+if comparison and st.session_state.get('v24_comparison_radius') == comparison_radius:
+    comparison_df = pd.DataFrame(comparison)
+    st.dataframe(comparison_df, hide_index=True, use_container_width=True)
+    st.download_button('📥 Télécharger la comparaison CSV', comparison_df.to_csv(index=False).encode('utf-8-sig'), file_name='zero_to_host_comparaison_v24.csv', mime='text/csv')
+    if comparison_df['Score documentaire / 100'].notna().all():
+        st.bar_chart(comparison_df.set_index('Ville')['Score documentaire / 100'])
+    else:
+        st.warning('Au moins une recherche a échoué : comparaison incomplète, aucun score fictif.')
+    st.caption('Méthode : 25 points si au moins une gare est référencée, 20 pour un hôpital, 15 pour un hôtel, 15 pour une université, 10 pour un musée et 15 pour une attraction. Aucun point supplémentaire pour les quantités. Un zéro signifie uniquement « aucune fiche trouvée dans cette recherche », jamais « aucun établissement existant ».')
+else:
+    st.info('Lance la comparaison pour afficher les trois villes avec le même rayon.')
+
 st.divider()
 st.subheader('Zweckentfremdungssatzung')
 if record['statut'] == 'Satzung confirmée':
@@ -261,4 +311,60 @@ m2.metric('Résultat mensuel estimé',f'{profit:,.0f} €')
 m3.metric('Retour sur investissement',f'{invest/profit:.1f} mois' if profit>0 else 'Non atteint')
 st.caption('Calcul simplifié, hors taxes, commissions et frais non renseignés. ADR et occupation sont des hypothèses, pas des statistiques Airbnb.')
 st.divider()
-st.info('À développer ensuite : base POI préchargée et vérifiée, 30 villes, zones de conduite complètes et PDF. Wikidata est une recherche automatique partielle, pas une base de marché Airbnb.')
+st.subheader('📄 Rapport PDF de l’analyse')
+st.caption('Le rapport indique explicitement les hypothèses et les limites des données. Les résultats de recherche ne sont pas des statistiques Airbnb.')
+
+def build_pdf_report():
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT
+    from xml.sax.saxutils import escape
+    output = io.BytesIO()
+    doc = SimpleDocTemplate(output, pagesize=(595, 842), rightMargin=42, leftMargin=42, topMargin=45, bottomMargin=45)
+    styles = getSampleStyleSheet()
+    story = [Paragraph('Zero to Host - Rapport de localisation V2.4', styles['Title']), Spacer(1, 12)]
+    def line(label, value):
+        story.append(Paragraph(f'<b>{escape(str(label))} :</b> {escape(str(value))}', styles['BodyText']))
+        story.append(Spacer(1, 6))
+    line('Date', date.today().isoformat())
+    line('Commune', city)
+    line('Adresse saisie', address or 'Non renseignee')
+    line('Zweckentfremdungssatzung - statut', record['satzung'])
+    line('Verification documentaire', record['date_verification'])
+    line('Source juridique', record['source'])
+    line('Observation juridique', record['remarque'])
+    story.append(Spacer(1, 10))
+    story.append(Paragraph('Hypotheses de rentabilite', styles['Heading2']))
+    for label, val in [
+        ('Prix par nuit (EUR)', f'{adr:.2f}'), ('Occupation supposee (%)', occ),
+        ('Loyer mensuel (EUR)', f'{rent:.2f}'), ('Autres charges fixes (EUR)', f'{fixed:.2f}'),
+        ('Couts variables (%)', variable), ('Investissement initial (EUR)', f'{invest:.2f}'),
+        ('Chiffre d affaires mensuel estime (EUR)', f'{revenue:.2f}'),
+        ('Resultat mensuel estime (EUR)', f'{profit:.2f}')
+    ]:
+        line(label, val)
+    if comparison and st.session_state.get('v24_comparison_radius') == comparison_radius:
+        story.append(Paragraph('Comparaison documentaire des trois villes', styles['Heading2']))
+        line('Rayon de recherche (km)', comparison_radius)
+        rows = [['Ville', 'Fiches', 'Score / 100', 'Recherche']]
+        for r in comparison:
+            rows.append([str(r['Ville']), str(r['Fiches Wikidata'] if r['Fiches Wikidata'] is not None else 'N/D'), str(r['Score documentaire / 100'] if r['Score documentaire / 100'] is not None else 'N/D'), r['Recherche']])
+        t = Table(rows, colWidths=[110, 70, 100, 160], repeatRows=1)
+        t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#e9eef6')),('GRID',(0,0),(-1,-1),0.4,colors.grey),('VALIGN',(0,0),(-1,-1),'TOP'),('FONTSIZE',(0,0),(-1,-1),9),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
+        story.append(t)
+    story.append(Spacer(1, 14))
+    story.append(Paragraph('Limites importantes', styles['Heading2']))
+    story.append(Paragraph('Wikidata est incomplet et ne mesure pas la demande Airbnb. Le score indique uniquement des categories documentees. Les durees OSRM excluent les embouteillages. Les prix et taux d occupation sont saisis par l utilisateur, non verifies. Les charges et impots non renseignes sont exclus. Confirmer les autorisations avec les autorites competentes avant tout engagement.', styles['BodyText']))
+    doc.build(story)
+    return output.getvalue()
+
+try:
+    pdf_bytes = build_pdf_report()
+    st.download_button('📄 Télécharger le rapport PDF V2.4', pdf_bytes, file_name=f'zero_to_host_v24_{city.lower()}.pdf', mime='application/pdf')
+except ImportError:
+    st.error('Pour activer le PDF, ajoute reportlab dans requirements.txt de ton dépôt GitHub.')
+except Exception as exc:
+    st.error('Le PDF n’a pas pu être généré. Vérifie les données et les journaux Streamlit.')
+
+st.info('Prochaine étape : base de lieux documentés plus complète, entreprises et zones d’activité, puis extension progressive à d’autres villes. Les données Wikidata ne remplacent pas une étude du marché Airbnb.')
