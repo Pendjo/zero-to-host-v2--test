@@ -11,7 +11,7 @@ import streamlit as st
 st.set_page_config(page_title="Zero to Host | Pilote V2", page_icon="🏠", layout="wide")
 DATA = json.loads((Path(__file__).parent / 'data' / 'villes.json').read_text(encoding='utf-8'))
 CITIES = {row['ville']: row for row in DATA}
-st.title('🏠 Zero to Host — V2.2 pilote')
+st.title('🏠 Zero to Host — V2.3 pilote')
 st.caption('Carte, adresses, trajets et données vérifiables · sans dépendance à Overpass')
 st.warning('Prototype autonome : ne remplace pas votre application actuelle. Ne constitue pas un avis juridique.')
 city = st.selectbox('Choisir une ville', sorted(CITIES))
@@ -19,7 +19,7 @@ address = st.text_input('Adresse du bien (facultative)', placeholder='Rue et num
 record = CITIES[city]
 
 st.subheader('🗺️ Carte interactive — Leonberg, Ditzingen et Rutesheim')
-st.caption('Les marqueurs indiquent des centres-villes approximatifs, et non des adresses de biens. Les distances routières de 20 minutes ne sont pas encore calculées.')
+st.caption('Les marqueurs de ville sont approximatifs. Les durées routières vers les trois centres sont calculables plus bas ; ce n’est pas une zone exhaustive de 20 minutes.')
 # Coordonnées indicatives des centres-villes. Aucune donnée POI n'est inventée.
 PILOT_CENTERS = {
     'Leonberg': (48.8015, 9.0161),
@@ -113,10 +113,92 @@ if st.button('🚗 Calculer les trajets (service externe)'):
         st.dataframe(pd.DataFrame(route_rows), hide_index=True, use_container_width=True)
         st.caption('Source : OSRM (réseau routier OSM). Les résultats ne tiennent pas compte des embouteillages. Centre de ville approximatif.')
 
-st.subheader('🏥🚉🏨 Facteurs de demande — données documentées')
-st.caption('Aucune donnée POI n’est inventée. Importe un CSV de lieux réels et sourcés pour les afficher sur la carte et les compter.')
-with st.expander('Importer un fichier CSV de lieux vérifiés', expanded=False):
-    st.markdown('Colonnes requises : `categorie,nom,lat,lon,source,date_verification`. Exemple : hôpital, gare, hôtel, entreprise, université.')
+st.subheader('🏥🚉🏨 Facteurs de demande — recherche automatique')
+st.caption('Source : Wikidata, données ouvertes collaboratives. Couverture partielle : une absence de résultat ne signifie PAS absence d’établissement. Cette recherche ne mesure pas la demande réelle Airbnb.')
+
+# Wikidata Query Service est distinct d’Overpass. Le service public peut être indisponible.
+# Les classes Wikidata retenues sont explicitement documentées ci-dessous.
+POI_TYPES = {
+    'Q16917': 'Hôpital',
+    'Q55488': 'Gare ferroviaire',
+    'Q27686': 'Hôtel',
+    'Q3918': 'Université',
+    'Q33506': 'Musée',
+    'Q570116': 'Attraction touristique',
+}
+
+@st.cache_data(ttl=604800, show_spinner=False)
+def wikidata_pois(lat, lon, radius_km):
+    # Recherche de lieux géolocalisés avec instance directe ou sous-classe à un niveau.
+    # LIMIT : résultats incomplets dans les zones denses ; aucun comptage exhaustif.
+    types = ' '.join('wd:' + k for k in POI_TYPES)
+    query = f"""
+    SELECT DISTINCT ?item ?itemLabel ?coord ?kind WHERE {{
+      SERVICE wikibase:around {{
+        ?item wdt:P625 ?coord .
+        bd:serviceParam wikibase:center 'Point({lon} {lat})'^^geo:wktLiteral .
+        bd:serviceParam wikibase:radius '{radius_km}' .
+      }}
+      VALUES ?kind {{ {types} }}
+      ?item wdt:P31/wdt:P279? ?kind .
+      SERVICE wikibase:label {{ bd:serviceParam wikibase:language 'fr,de,en'. }}
+    }} LIMIT 180
+    """
+    try:
+        response = requests.get(
+            'https://query.wikidata.org/sparql',
+            params={'query': query, 'format': 'json'},
+            headers={'User-Agent': 'ZeroToHostStandortanalyse/2.3 (educational prototype; contact via github.com/Pendjo/zero-to-host-v2-test)', 'Accept': 'application/sparql-results+json'},
+            timeout=(5, 18),
+        )
+        response.raise_for_status()
+        bindings = response.json()['results']['bindings']
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        return None
+    results = []
+    seen = set()
+    for b in bindings:
+        try:
+            uri = b['item']['value']
+            qid = uri.rsplit('/', 1)[-1]
+            kind = b['kind']['value'].rsplit('/', 1)[-1]
+            match = re.fullmatch(r'Point\((-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)\)', b['coord']['value'])
+            if not match or kind not in POI_TYPES or (qid, kind) in seen:
+                continue
+            seen.add((qid, kind))
+            longitude, latitude = map(float, match.groups())
+            name = b.get('itemLabel', {}).get('value', qid)
+            results.append({'categorie': POI_TYPES[kind], 'nom': name, 'lat': latitude, 'lon': longitude, 'source': uri, 'identifiant': qid})
+        except (ValueError, KeyError, TypeError):
+            continue
+    return results
+
+radius_km = st.slider('Rayon de recherche des établissements (km)', min_value=2, max_value=15, value=7)
+st.caption('Point de départ : adresse géocodée si elle a été trouvée ; sinon centre approximatif de la ville choisie.')
+if st.button('🔎 Rechercher automatiquement les établissements'):
+    with st.spinner('Recherche Wikidata…'):
+        st.session_state['poi_result'] = wikidata_pois(round(start_point[0], 5), round(start_point[1], 5), radius_km)
+        st.session_state['poi_context'] = (round(start_point[0], 5), round(start_point[1], 5), radius_km)
+context = (round(start_point[0], 5), round(start_point[1], 5), radius_km)
+if st.session_state.get('poi_context') == context:
+    results = st.session_state.get('poi_result')
+    if results is None:
+        st.warning('Wikidata est indisponible pour cette recherche. Aucun nombre ne peut être confirmé. Réessaie plus tard ou utilise un CSV.')
+    elif not results:
+        st.info('Aucun établissement référencé trouvé dans Wikidata pour cette requête. Cela ne signifie pas qu’il n’existe aucun établissement.')
+    else:
+        poi_df = pd.DataFrame(results)
+        st.success(f'{len(poi_df)} correspondances Wikidata trouvées (résultats partiels, doublons possibles entre catégories).')
+        st.dataframe(poi_df.groupby('categorie').size().reset_index(name='Fiches trouvées (non exhaustif)'), hide_index=True, use_container_width=True)
+        st.map(poi_df, latitude='lat', longitude='lon', zoom=11, use_container_width=True)
+        st.dataframe(poi_df[['categorie', 'nom', 'source']], hide_index=True, use_container_width=True, column_config={'source': st.column_config.LinkColumn('Fiche Wikidata')})
+        st.download_button('📥 Télécharger ces résultats CSV', poi_df.to_csv(index=False).encode('utf-8-sig'), file_name='poi_wikidata_pilote.csv', mime='text/csv')
+        st.caption('Attention : Wikidata n’est pas un annuaire exhaustif. Les entreprises, zones d’activité et événements ne sont pas couverts par cette recherche.')
+else:
+    st.info('Clique sur « Rechercher automatiquement » pour obtenir les lieux documentés disponibles.')
+
+with st.expander('Option complémentaire : importer des lieux vérifiés par CSV', expanded=False):
+    st.markdown('Colonnes requises : `categorie,nom,lat,lon,source,date_verification`.')
     template = 'categorie,nom,lat,lon,source,date_verification\n'
     st.download_button('📄 Télécharger le modèle CSV', template.encode('utf-8'), file_name='modele_poi_verifies.csv', mime='text/csv')
     uploaded = st.file_uploader('CSV de lieux vérifiés', type=['csv'])
@@ -131,15 +213,12 @@ with st.expander('Importer un fichier CSV de lieux vérifiés', expanded=False):
                 poi['lon'] = pd.to_numeric(poi['lon'], errors='coerce')
                 poi = poi.dropna(subset=['lat','lon','nom','source','date_verification'])
                 poi = poi[poi['lat'].between(-90,90) & poi['lon'].between(-180,180)]
-                st.success(f'{len(poi)} lieux valides importés. Ces données proviennent du fichier fourni, sans vérification indépendante automatique.')
+                st.success(f'{len(poi)} lieux importés ; vérification indépendante non effectuée.')
                 if len(poi):
                     st.map(poi, latitude='lat', longitude='lon', zoom=11, use_container_width=True)
                     st.dataframe(poi[['categorie','nom','source','date_verification']], hide_index=True, use_container_width=True)
-                    st.dataframe(poi.groupby('categorie').size().reset_index(name='Nombre dans le CSV'), hide_index=True)
-        except Exception as exc:
+        except (ValueError, pd.errors.ParserError, UnicodeDecodeError):
             st.error('Impossible de lire ce CSV. Vérifie le séparateur et les colonnes.')
-    else:
-        st.info('Pas encore de base POI vérifiée intégrée : aucun nombre d’hôpitaux, gares ou hôtels n’est annoncé.')
 st.divider()
 st.subheader('Zweckentfremdungssatzung')
 if record['statut'] == 'Satzung confirmée':
@@ -182,4 +261,4 @@ m2.metric('Résultat mensuel estimé',f'{profit:,.0f} €')
 m3.metric('Retour sur investissement',f'{invest/profit:.1f} mois' if profit>0 else 'Non atteint')
 st.caption('Calcul simplifié, hors taxes, commissions et frais non renseignés. ADR et occupation sont des hypothèses, pas des statistiques Airbnb.')
 st.divider()
-st.info('À développer ensuite : base POI préchargée et sourcée, 30 villes, zones de conduite complètes et PDF. Les trajets OSRM sont des durées vers trois centres, pas une zone complète de 20 minutes.')
+st.info('À développer ensuite : base POI préchargée et vérifiée, 30 villes, zones de conduite complètes et PDF. Wikidata est une recherche automatique partielle, pas une base de marché Airbnb.')
