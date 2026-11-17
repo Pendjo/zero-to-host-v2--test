@@ -1,4 +1,4 @@
-"""Zero to Host V2 — pilote juridique autonome, sans dépendance Overpass."""
+"""Zero to Host V3.1 — analyse séparée des clientèles et diagnostic des sources."""
 import json
 import io
 import re
@@ -9,14 +9,14 @@ import logging
 from pathlib import Path
 import streamlit as st
 
-st.set_page_config(page_title="Zero to Host | Pilote V2", page_icon="🏠", layout="wide")
+st.set_page_config(page_title="Zero to Host | V3.1", page_icon="🏠", layout="wide")
 DATA_PATH = Path(__file__).parent / 'data' / 'villes.json'
 if not DATA_PATH.exists():
     st.error('Fichier manquant : data/villes.json. Conserve le dossier data de la V2.3 dans ton dépôt GitHub.')
     st.stop()
 DATA = json.loads(DATA_PATH.read_text(encoding='utf-8'))
 CITIES = {row['ville']: row for row in DATA}
-st.title('🏠 Zero to Host — V2.8.1 pilote')
+st.title('🏠 Zero to Host — V3.1')
 st.caption('Recherche libre, zones accessibles en voiture, Wikidata, réglementation, rentabilité et PDF')
 st.warning('Prototype autonome : ne remplace pas votre application actuelle. Ne constitue pas un avis juridique.')
 mode = st.radio('Mode de recherche', ['Ville enregistrée', 'Saisir librement une ville allemande'], horizontal=True)
@@ -700,7 +700,7 @@ def build_pdf_report():
     output = io.BytesIO()
     doc = SimpleDocTemplate(output, pagesize=(595, 842), rightMargin=42, leftMargin=42, topMargin=45, bottomMargin=45)
     styles = getSampleStyleSheet()
-    story = [Paragraph('Zero to Host - Rapport de localisation V2.8.1', styles['Title']), Spacer(1, 12)]
+    story = [Paragraph('Zero to Host - Rapport de localisation V3.1', styles['Title']), Spacer(1, 12)]
     def line(label, value):
         story.append(Paragraph(f'<b>{escape(str(label))} :</b> {escape(str(value))}', styles['BodyText']))
         story.append(Spacer(1, 6))
@@ -743,7 +743,7 @@ def build_pdf_report():
 
 try:
     pdf_bytes = build_pdf_report()
-    st.download_button('📄 Télécharger le rapport PDF V2.8.1', pdf_bytes, file_name=f'zero_to_host_v281_{re.sub(r'[^a-z0-9_-]', '_', city.lower())}.pdf', mime='application/pdf')
+    st.download_button('📄 Télécharger le rapport PDF V3.1', pdf_bytes, file_name=f'zero_to_host_v31_{re.sub(r'[^a-z0-9_-]', '_', city.lower())}.pdf', mime='application/pdf')
 except ImportError:
     st.error('Pour activer le PDF, ajoute reportlab dans requirements.txt de ton dépôt GitHub.')
 except Exception as exc:
