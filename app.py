@@ -1,4 +1,4 @@
-"""Zero to Host V3.5 — analyse séparée des clientèles et diagnostic des sources."""
+"""Zero to Host V3.6 — analyse séparée des clientèles et diagnostic des sources."""
 import json
 import io
 import re
@@ -9,14 +9,14 @@ import logging
 from pathlib import Path
 import streamlit as st
 
-st.set_page_config(page_title="Zero to Host | V3.5", page_icon="🏠", layout="wide")
+st.set_page_config(page_title="Zero to Host | V3.6", page_icon="🏠", layout="wide")
 DATA_PATH = Path(__file__).parent / 'data' / 'villes.json'
 if not DATA_PATH.exists():
     st.error('Fichier manquant : data/villes.json. Conserve le dossier data de la V2.3 dans ton dépôt GitHub.')
     st.stop()
 DATA = json.loads(DATA_PATH.read_text(encoding='utf-8'))
 CITIES = {row['ville']: row for row in DATA}
-st.title('🏠 Zero to Host — V3.5')
+st.title('🏠 Zero to Host — V3.6')
 st.caption('Recherche libre, zones accessibles en voiture, Wikidata, réglementation, rentabilité et PDF')
 st.warning('Prototype autonome : ne remplace pas votre application actuelle. Ne constitue pas un avis juridique.')
 mode = st.radio('Mode de recherche', ['Ville enregistrée', 'Saisir librement une ville allemande'], horizontal=True)
@@ -496,12 +496,27 @@ def balanced_candidates(candidates, cap=60):
     return selected
 
 def prioritize_local_candidates(candidates, cap=60):
-    """Les fiches locales passent avant Wikidata, sans perdre la diversité des catégories."""
+    """V3.6: proches d'abord, avec un quota de diversité; CSV avant Wikidata.
+
+    Les 60 trajets restent un échantillon, pas un inventaire exhaustif.
+    """
     local = [p for p in candidates if str(p.get('Fiabilité', '')).startswith('Base locale')]
     remote = [p for p in candidates if not str(p.get('Fiabilité', '')).startswith('Base locale')]
-    local_selected = balanced_candidates(local, cap=cap)
-    remaining = max(0, cap - len(local_selected))
-    return local_selected + balanced_candidates(remote, cap=remaining)
+    selected = []
+    for pool in (local, remote):
+        available = cap - len(selected)
+        if available <= 0:
+            break
+        ordered = sorted(pool, key=lambda p: p['Distance directe (km)'])
+        # Réserver au maximum une place par catégorie; ensuite proximité pure.
+        categories = {}
+        for p in ordered:
+            categories.setdefault(p['Catégorie'], p)
+        reserve = list(categories.values())[:min(len(categories), max(1, available // 5))]
+        used = {id(p) for p in reserve}
+        selected.extend(reserve)
+        selected.extend(p for p in ordered if id(p) not in used and len(selected) < cap)
+    return selected[:cap]
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -608,7 +623,7 @@ def local_demand_places(lat, lon, group):
                           'Fiabilité': 'Base locale — activité non vérifiée'})
     return sorted(found, key=lambda x: x['Distance directe (km)']), f'Base locale : {len(found)} lieux dans le rayon ({len(subset)} fiches pour cette clientèle)'
 
-st.caption('V3.4 : recherche principale depuis une base CSV locale si elle existe, avec complément Wikidata. Aucun appel Overpass pendant la recherche normale.')
+st.caption('V3.6 : recherche principale depuis une base CSV locale si elle existe, avec complément Wikidata. Aucun appel Overpass pendant la recherche normale.')
 with st.expander('📂 Base de lieux locale — fonctionnement V3.4', expanded=False):
     st.write('Dépose un fichier `data/lieux_allemagne.csv` dans GitHub pour alimenter la recherche sans Overpass. Le fichier peut contenir des établissements de plusieurs régions allemandes.')
     st.write('Colonnes : `nom,categorie,lat,lon,source,public_cible` ; public_cible = `professionnel` ou `tourisme`. Les coordonnées doivent être réelles et les sources vérifiables.')
@@ -667,6 +682,10 @@ if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='deman
                 f"Base locale après OSRM : {local_within} dans la limite de {config['minutes']} min ; "
                 f"{local_outside} au-delà ; {local_unreachable} sans itinéraire"
             )
+            checked_rows = [{**place, 'Trajet voiture (min)': mins,
+                             'Statut trajet': ('Sans itinéraire' if mins is None else
+                                 ('Dans la limite' if mins <= config['minutes'] else 'Au-delà de la limite'))}
+                            for place, mins in zip(selected, minutes)]
             rows = [{**place, 'Trajet voiture (min)': mins,
                      'Sous-catégorie V3.4': audience_category(place, group)}
                     for place, mins in zip(selected, minutes)
@@ -674,6 +693,7 @@ if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='deman
             report[group] = {'status': 'Partiel', 'rows': sorted(rows, key=lambda x: x['Trajet voiture (min)']),
                              'candidates': len(candidates), 'tested': len(selected), 'source': source_name,
                              'local_within': local_within, 'local_outside': local_outside,
+                             'checked_rows': checked_rows,
                              'diagnostics': diagnostics}
     st.session_state['v34_demand'] = report
     st.session_state['v34_origin'] = (city, origin_key)
@@ -700,7 +720,7 @@ if st.session_state.get('v34_origin') == (city, origin_key) and st.session_state
                 st.caption('Cibles : entreprises, zones d’activité, hôpitaux, universités et recherche. Les emplois, chantiers et déplacements professionnels ne sont pas mesurés.')
             else:
                 st.caption('Cibles : salons, congrès, spectacles, attractions et loisirs. Les événements programmés et leur fréquentation ne sont pas vérifiés.')
-            with st.expander('🔧 Diagnostic des services (V3.4)', expanded=result.get('status') != 'Partiel'):
+            with st.expander('🔧 Diagnostic des services (V3.6)', expanded=result.get('status') != 'Partiel'):
                 for message in result.get('diagnostics', []):
                     st.write('• ' + message)
                 if not result.get('diagnostics'):
@@ -710,6 +730,17 @@ if st.session_state.get('v34_origin') == (city, origin_key) and st.session_state
                 continue
             st.caption(f"Source : {result['source']} · {result['tested']} candidats évalués sur {result['candidates']} trouvés (maximum 60). Résultats partiels.")
             st.info(f"Base locale : {result.get('local_within', 0)} lieu(x) à {DEMAND_GROUPS[group]['minutes']} min maximum en voiture ; {result.get('local_outside', 0)} au-delà. Ce décompte ne mesure pas la demande Airbnb.")
+            if result.get('checked_rows'):
+                with st.expander('🔎 Voir les candidats évalués et exclus', expanded=False):
+                    checked_df = pd.DataFrame(result['checked_rows'])
+                    st.dataframe(checked_df[['Nom', 'Catégorie', 'Trajet voiture (min)',
+                                             'Statut trajet', 'Distance directe (km)', 'Source']],
+                                 hide_index=True, width='stretch',
+                                 column_config={'Source': st.column_config.LinkColumn('Fiche source')})
+                    st.download_button('📥 Télécharger les candidats évalués (CSV)',
+                        checked_df.to_csv(index=False).encode('utf-8-sig'),
+                        file_name=('professionnel' if group.startswith('Professionnel') else 'tourisme') + '_candidats_v36.csv',
+                        mime='text/csv', key='checked_v36_' + group)
             if not result.get('rows'):
                 st.info('Aucun lieu retenu parmi les candidats évalués. Cela ne signifie pas absence de demande.')
                 continue
