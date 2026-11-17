@@ -1,4 +1,4 @@
-"""Zero to Host V3.3 — analyse séparée des clientèles et diagnostic des sources."""
+"""Zero to Host V3.4 — analyse séparée des clientèles et diagnostic des sources."""
 import json
 import io
 import re
@@ -9,14 +9,14 @@ import logging
 from pathlib import Path
 import streamlit as st
 
-st.set_page_config(page_title="Zero to Host | V3.3", page_icon="🏠", layout="wide")
+st.set_page_config(page_title="Zero to Host | V3.4", page_icon="🏠", layout="wide")
 DATA_PATH = Path(__file__).parent / 'data' / 'villes.json'
 if not DATA_PATH.exists():
     st.error('Fichier manquant : data/villes.json. Conserve le dossier data de la V2.3 dans ton dépôt GitHub.')
     st.stop()
 DATA = json.loads(DATA_PATH.read_text(encoding='utf-8'))
 CITIES = {row['ville']: row for row in DATA}
-st.title('🏠 Zero to Host — V3.3')
+st.title('🏠 Zero to Host — V3.4')
 st.caption('Recherche libre, zones accessibles en voiture, Wikidata, réglementation, rentabilité et PDF')
 st.warning('Prototype autonome : ne remplace pas votre application actuelle. Ne constitue pas un avis juridique.')
 mode = st.radio('Mode de recherche', ['Ville enregistrée', 'Saisir librement une ville allemande'], horizontal=True)
@@ -286,7 +286,7 @@ def record_service_issue(service, exc):
 # V3.0 : recherche OSM ciblée, avec repli Wikidata, puis contrôle routier OSRM.
 # Les données OSM sont contributives et incomplètes. Pas de promesse d'exhaustivité.
 st.divider()
-st.subheader('🏭🎪 Bassins de demande autour du logement — V3.3')
+st.subheader('🏭🎪 Bassins de demande autour du logement — V3.4')
 st.markdown('**Professionnel : 15 min maximum en voiture** · **Salons, attractions et loisirs : 50 min maximum en voiture**')
 st.caption('Départ : adresse géocodée si disponible, sinon centre approximatif de la commune. OSRM : temps hors trafic, sans stationnement. La recherche comprend les communes voisines.')
 
@@ -297,7 +297,7 @@ DEMAND_GROUPS = {
         'types': {'Q1529128': 'Parc des expositions', 'Q33506': 'Musée', 'Q570116': 'Attraction touristique', 'Q3375722': 'Parc de loisirs', 'Q24354': 'Théâtre'}},
 }
 
-# V3.3 : petites requêtes OSM indépendantes pour limiter les échecs Overpass.
+# V3.4 : petites requêtes OSM indépendantes pour limiter les échecs Overpass.
 # Un service indisponible n'est jamais assimilé à une absence de lieux.
 OSM_FILTERS = {
     'Professionnel (15 min)': [
@@ -318,7 +318,7 @@ OSM_FILTERS = {
     ],
 }
 
-# V3.3 : test de connectivité indépendant des grandes recherches OSM.
+# V3.4 : test de connectivité indépendant des grandes recherches OSM.
 # Ne transmet ni adresse ni coordonnées du logement aux serveurs.
 OVERPASS_ENDPOINTS = [
     'https://overpass.kumi.systems/api/interpreter',
@@ -522,7 +522,7 @@ def driving_minutes_to_places(lat, lon, coordinates):
             return None, diagnostics + [record_service_issue('OSRM', exc)]
     return output, diagnostics + [f'OSRM : {len(output)} trajets évalués']
 
-# V3.3 : lecture pédagogique par clientèle. Une fiche OSM/Wikidata n'est pas
+# V3.4 : lecture pédagogique par clientèle. Une fiche OSM/Wikidata n'est pas
 # une preuve d'activité, d'effectifs, de fréquentation ou de demande Airbnb.
 LEISURE_TERMS = ('cinema', 'cinéma', 'cineplex', 'cine', 'kino', 'lichtburg',
                  'filmstudio', 'theater', 'theatre', 'théâtre', 'museum', 'musée',
@@ -558,33 +558,75 @@ def audience_category(place, group):
         return 'Patrimoine'
     return 'Attractions touristiques'
 
+# V3.4 : base locale facultative. Elle ne dépend pas du réseau Overpass.
+# Un export OSM régional doit être préparé hors de Streamlit puis placé dans data/.
+LOCAL_PLACES_PATH = Path(__file__).parent / 'data' / 'lieux_allemagne.csv'
+LOCAL_COLUMNS = {'nom', 'categorie', 'lat', 'lon', 'source', 'public_cible'}
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def read_local_places(path_string, file_mtime):
+    try:
+        table = pd.read_csv(path_string, dtype={'nom': str, 'categorie': str, 'source': str,
+                                                'public_cible': str}, encoding='utf-8-sig')
+        if not LOCAL_COLUMNS.issubset(table.columns):
+            return None, 'Colonnes requises : ' + ', '.join(sorted(LOCAL_COLUMNS))
+        table['lat'] = pd.to_numeric(table['lat'], errors='coerce')
+        table['lon'] = pd.to_numeric(table['lon'], errors='coerce')
+        table = table.dropna(subset=['nom', 'categorie', 'lat', 'lon', 'source', 'public_cible'])
+        table = table[table['lat'].between(47, 56) & table['lon'].between(5, 16)]
+        table = table[table['public_cible'].str.strip().str.lower().isin(['professionnel', 'tourisme'])]
+        return table, None
+    except (OSError, ValueError, UnicodeError, pd.errors.ParserError) as exc:
+        return None, f'Lecture CSV impossible : {type(exc).__name__}'
+
+def local_demand_places(lat, lon, group):
+    if not LOCAL_PLACES_PATH.is_file():
+        return [], 'Base locale absente (facultative) : data/lieux_allemagne.csv'
+    table, error = read_local_places(str(LOCAL_PLACES_PATH), LOCAL_PLACES_PATH.stat().st_mtime_ns)
+    if error:
+        return [], 'Base locale : ' + error
+    audience = 'professionnel' if group.startswith('Professionnel') else 'tourisme'
+    subset = table[table['public_cible'].str.strip().str.lower() == audience]
+    # Préfiltre géographique à vol d’oiseau ; le filtre définitif reste OSRM.
+    max_km = DEMAND_GROUPS[group]['radius_km']
+    found = []
+    for row in subset.itertuples(index=False):
+        dist = distance_km(lat, lon, float(row.lat), float(row.lon))
+        if dist <= max_km:
+            found.append({'Nom': str(row.nom), 'Catégorie': str(row.categorie),
+                          'lat': float(row.lat), 'lon': float(row.lon),
+                          'Source': str(row.source), 'Distance directe (km)': round(dist, 1),
+                          'Fiabilité': 'Base locale — activité non vérifiée'})
+    return sorted(found, key=lambda x: x['Distance directe (km)']), f'Base locale : {len(found)} lieux dans le rayon ({len(subset)} fiches pour cette clientèle)'
+
+st.caption('V3.4 : recherche principale depuis une base CSV locale si elle existe, avec complément Wikidata. Aucun appel Overpass pendant la recherche normale.')
+with st.expander('📂 Base de lieux locale — fonctionnement V3.4', expanded=False):
+    st.write('Dépose un fichier `data/lieux_allemagne.csv` dans GitHub pour alimenter la recherche sans Overpass. Le fichier peut contenir des établissements de plusieurs régions allemandes.')
+    st.write('Colonnes : `nom,categorie,lat,lon,source,public_cible` ; public_cible = `professionnel` ou `tourisme`. Les coordonnées doivent être réelles et les sources vérifiables.')
+    st.download_button('📥 Télécharger le modèle CSV vide',
+        'nom,categorie,lat,lon,source,public_cible\n'.encode('utf-8-sig'),
+        file_name='modele_lieux_allemagne.csv', mime='text/csv')
+    st.info('Aucune base d’entreprises complète n’est incluse. Sans CSV local, les résultats proviennent de Wikidata uniquement ; leur couverture reste partielle.')
+
 origin_key = (round(start_point[0], 5), round(start_point[1], 5))
 if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='demand_search'):
     report = {}
-    with st.spinner('Recherche OpenStreetMap et vérification des trajets…'):
+    with st.spinner('Recherche dans la base locale, Wikidata et calcul des trajets…'):
         for group, config in DEMAND_GROUPS.items():
-            candidates, diagnostics = osm_demand_places(*origin_key, group)
-            source_name = 'OpenStreetMap + Wikidata' if candidates is not None else 'Wikidata (secours)'
+            candidates, local_message = local_demand_places(*origin_key, group)
+            diagnostics = [local_message]
+            source_name = 'Base locale + Wikidata' if candidates else 'Wikidata (base locale vide ou absente)'
             wikidata_candidates, fallback_diagnostics = discover_demand_places(*origin_key, group)
             diagnostics += fallback_diagnostics
-            if candidates is None:
-                candidates = wikidata_candidates
-            elif wikidata_candidates:
-                # Dédupliquer les fiches provenant des deux sources (nom + proximité).
+            if wikidata_candidates:
                 seen = {(re.sub(r'\W+', '', p['Nom'].casefold()), round(p['lat'], 3), round(p['lon'], 3)) for p in candidates}
                 for place in wikidata_candidates:
                     key = (re.sub(r'\W+', '', place['Nom'].casefold()), round(place['lat'], 3), round(place['lon'], 3))
                     if key not in seen:
                         candidates.append(place)
                         seen.add(key)
-            elif candidates is not None:
-                source_name = 'OpenStreetMap (Wikidata indisponible ou vide)'
-            if candidates is None:
-                candidates, fallback_diagnostics = discover_demand_places(*origin_key, group)
-                diagnostics += fallback_diagnostics
-                source_name = 'Wikidata (secours)'
-            if candidates is None:
-                report[group] = {'status': 'Sources de lieux indisponibles', 'rows': [], 'diagnostics': diagnostics}
+            elif wikidata_candidates is None and not candidates:
+                report[group] = {'status': 'Base locale vide et Wikidata indisponible', 'rows': [], 'diagnostics': diagnostics}
                 continue
             if not candidates:
                 report[group] = {'status': 'Aucun lieu documenté trouvé', 'rows': [], 'diagnostics': diagnostics}
@@ -597,27 +639,27 @@ if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='deman
                 report[group] = {'status': 'Calcul routier indisponible', 'rows': [], 'diagnostics': diagnostics}
                 continue
             rows = [{**place, 'Trajet voiture (min)': mins,
-                     'Sous-catégorie V3.3': audience_category(place, group)}
+                     'Sous-catégorie V3.4': audience_category(place, group)}
                     for place, mins in zip(selected, minutes)
                     if mins is not None and mins <= config['minutes']]
             report[group] = {'status': 'Partiel', 'rows': sorted(rows, key=lambda x: x['Trajet voiture (min)']),
                              'candidates': len(candidates), 'tested': len(selected), 'source': source_name,
                              'diagnostics': diagnostics}
-    st.session_state['v33_demand'] = report
-    st.session_state['v33_origin'] = (city, origin_key)
+    st.session_state['v34_demand'] = report
+    st.session_state['v34_origin'] = (city, origin_key)
 
-if st.session_state.get('v33_origin') == (city, origin_key) and st.session_state.get('v33_demand'):
-    report = st.session_state['v33_demand']
+if st.session_state.get('v34_origin') == (city, origin_key) and st.session_state.get('v34_demand'):
+    report = st.session_state['v34_demand']
     st.markdown('### Deux clientèles, deux analyses distinctes')
-    with st.expander('🧪 Diagnostic réseau Overpass V3.3 — GET / POST', expanded=False):
+    with st.expander('🧪 Diagnostic réseau Overpass V3.4 — GET / POST', expanded=False):
         st.caption('Test indépendant des lieux : petite requête publique, sans adresse ni coordonnées de ton logement. Peut prendre jusqu’à environ une minute si les serveurs ne répondent pas.')
-        if st.button('Tester la connexion aux serveurs Overpass', key='test_overpass_v33'):
+        if st.button('Tester la connexion aux serveurs Overpass', key='test_overpass_v34'):
             with st.spinner('Test GET et POST en cours…'):
-                st.session_state['overpass_v33_results'] = test_overpass_connectivity()
-        for diagnostic in st.session_state.get('overpass_v33_results', []):
+                st.session_state['overpass_v34_results'] = test_overpass_connectivity()
+        for diagnostic in st.session_state.get('overpass_v34_results', []):
             st.write('• ' + diagnostic)
 
-    st.caption('Un lieu référencé est un indice de contexte, pas une preuve de nuitées vendues. Les trajets OSRM sont hors trafic.')
+    st.caption('Un lieu référencé est un indice de contexte, pas une preuve de nuitées vendues. La base locale ne garantit pas l’activité actuelle. Les trajets OSRM sont hors trafic.')
     tab_pro, tab_tour = st.tabs(['🏭 Monteure & Geschäftsreisende · 15 min',
                                 '🎪 Touristes, familles & événements · 50 min'])
     for tab, group in zip((tab_pro, tab_tour), DEMAND_GROUPS):
@@ -628,7 +670,7 @@ if st.session_state.get('v33_origin') == (city, origin_key) and st.session_state
                 st.caption('Cibles : entreprises, zones d’activité, hôpitaux, universités et recherche. Les emplois, chantiers et déplacements professionnels ne sont pas mesurés.')
             else:
                 st.caption('Cibles : salons, congrès, spectacles, attractions et loisirs. Les événements programmés et leur fréquentation ne sont pas vérifiés.')
-            with st.expander('🔧 Diagnostic des services (V3.3)', expanded=result.get('status') != 'Partiel'):
+            with st.expander('🔧 Diagnostic des services (V3.4)', expanded=result.get('status') != 'Partiel'):
                 for message in result.get('diagnostics', []):
                     st.write('• ' + message)
                 if not result.get('diagnostics'):
@@ -641,9 +683,9 @@ if st.session_state.get('v33_origin') == (city, origin_key) and st.session_state
                 st.info('Aucun lieu retenu parmi les candidats évalués. Cela ne signifie pas absence de demande.')
                 continue
             df = pd.DataFrame(result['rows'])
-            if 'Sous-catégorie V3.3' not in df.columns:
-                df['Sous-catégorie V3.3'] = [audience_category(r, group) for r in result['rows']]
-            excluded = df['Sous-catégorie V3.3'].str.startswith('À vérifier — loisir')
+            if 'Sous-catégorie V3.4' not in df.columns:
+                df['Sous-catégorie V3.4'] = [audience_category(r, group) for r in result['rows']]
+            excluded = df['Sous-catégorie V3.4'].str.startswith('À vérifier — loisir')
             if group.startswith('Professionnel') and excluded.any():
                 st.warning(f"{int(excluded.sum())} lieu(x) de loisirs/spectacles écarté(s) de la synthèse professionnelle ; consulter l'export pour les vérifier.")
             shown = df.loc[~excluded].copy() if group.startswith('Professionnel') else df
@@ -651,17 +693,17 @@ if st.session_state.get('v33_origin') == (city, origin_key) and st.session_state
                 st.info('Aucun lieu professionnel clairement classé dans cet échantillon.')
             else:
                 st.markdown('**Répartition des lieux identifiés**')
-                summary = shown.groupby('Sous-catégorie V3.3').size().reset_index(name='Lieux référencés')
+                summary = shown.groupby('Sous-catégorie V3.4').size().reset_index(name='Lieux référencés')
                 st.dataframe(summary, hide_index=True, width='stretch')
-                st.dataframe(shown[['Nom', 'Sous-catégorie V3.3', 'Catégorie', 'Trajet voiture (min)', 'Distance directe (km)', 'Source', 'Fiabilité']],
+                st.dataframe(shown[['Nom', 'Sous-catégorie V3.4', 'Catégorie', 'Trajet voiture (min)', 'Distance directe (km)', 'Source', 'Fiabilité']],
                     hide_index=True, width='stretch', column_config={'Source': st.column_config.LinkColumn('Fiche source')})
                 st.map(shown, latitude='lat', longitude='lon', width='stretch')
             st.download_button('📥 Télécharger cette analyse (CSV)', df.to_csv(index=False).encode('utf-8-sig'),
-                file_name=('professionnel' if group.startswith('Professionnel') else 'tourisme') + '_v33.csv',
-                mime='text/csv', key='csv_v33_' + group)
+                file_name=('professionnel' if group.startswith('Professionnel') else 'tourisme') + '_v34.csv',
+                mime='text/csv', key='csv_v34_' + group)
 else:
     st.info('Clique sur « Rechercher les bassins de demande » pour lancer les deux analyses séparées.')
-st.caption('⚠️ Sources publiques partielles : Wikidata peut classer des cinémas comme entreprises ; les catégories sont indicatives. Overpass peut être indisponible. Aucun taux d’occupation ni revenu Airbnb n’est déduit de ces lieux.')
+st.caption('⚠️ Base locale facultative et Wikidata partiel : la couverture et l’activité des établissements ne sont pas garanties. Aucun taux d’occupation ni revenu Airbnb n’est déduit de ces lieux.')
 
 comparison_radius = st.slider('Rayon identique pour comparer les villes (km)', 2, 15, 7, key='comparison_radius')
 if st.button('📊 Comparer les trois villes (Wikidata)', key='compare_cities'):
@@ -767,7 +809,7 @@ def build_pdf_report():
     output = io.BytesIO()
     doc = SimpleDocTemplate(output, pagesize=(595, 842), rightMargin=42, leftMargin=42, topMargin=45, bottomMargin=45)
     styles = getSampleStyleSheet()
-    story = [Paragraph('Zero to Host - Rapport de localisation V3.3', styles['Title']), Spacer(1, 12)]
+    story = [Paragraph('Zero to Host - Rapport de localisation V3.4', styles['Title']), Spacer(1, 12)]
     def line(label, value):
         story.append(Paragraph(f'<b>{escape(str(label))} :</b> {escape(str(value))}', styles['BodyText']))
         story.append(Spacer(1, 6))
@@ -778,11 +820,11 @@ def build_pdf_report():
     line('Verification documentaire', record['date_verification'])
     line('Source juridique', record['source'])
     line('Observation juridique', record['remarque'])
-    if st.session_state.get('v33_origin') == (city, origin_key) and st.session_state.get('v33_demand'):
-        story.append(Paragraph('Bassins de demande V3.3 (resultats partiels)', styles['Heading2']))
-        for group, result in st.session_state['v33_demand'].items():
+    if st.session_state.get('v34_origin') == (city, origin_key) and st.session_state.get('v34_demand'):
+        story.append(Paragraph('Bassins de demande V3.4 (resultats partiels)', styles['Heading2']))
+        for group, result in st.session_state['v34_demand'].items():
             line(group, f"{len(result['rows'])} lieux avec trajet confirme ; statut : {result['status']}")
-        line('Methode', 'OpenStreetMap ou Wikidata partiel ; trajet routier OSRM hors trafic ; maximum 60 candidats par bassin')
+        line('Methode', 'Base locale facultative et Wikidata partiel ; trajet routier OSRM hors trafic ; maximum 60 candidats par bassin')
     story.append(Spacer(1, 10))
     story.append(Paragraph('Hypotheses de rentabilite', styles['Heading2']))
     for label, val in [
@@ -810,7 +852,7 @@ def build_pdf_report():
 
 try:
     pdf_bytes = build_pdf_report()
-    st.download_button('📄 Télécharger le rapport PDF V3.3', pdf_bytes, file_name='zero_to_host_v33_' + re.sub(r'[^a-z0-9_-]', '_', city.lower()) + '.pdf', mime='application/pdf')
+    st.download_button('📄 Télécharger le rapport PDF V3.4', pdf_bytes, file_name='zero_to_host_v34_' + re.sub(r'[^a-z0-9_-]', '_', city.lower()) + '.pdf', mime='application/pdf')
 except ImportError:
     st.error('Pour activer le PDF, ajoute reportlab dans requirements.txt de ton dépôt GitHub.')
 except Exception as exc:
