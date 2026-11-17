@@ -1,4 +1,4 @@
-"""Zero to Host V3.7 — base régionale et compléments Overture, contrôle de couverture."""
+"""Zero to Host V3.8 — base régionale et compléments Overture, contrôle de couverture."""
 import json
 import io
 import re
@@ -16,7 +16,7 @@ if not DATA_PATH.exists():
     st.stop()
 DATA = json.loads(DATA_PATH.read_text(encoding='utf-8'))
 CITIES = {row['ville']: row for row in DATA}
-st.title('🏠 Zero to Host — V3.7')
+st.title('🏠 Zero to Host — V3.8')
 st.caption('Recherche libre, zones accessibles en voiture, Wikidata, réglementation, rentabilité et PDF')
 st.warning('Prototype autonome : ne remplace pas votre application actuelle. Ne constitue pas un avis juridique.')
 mode = st.radio('Mode de recherche', ['Ville enregistrée', 'Saisir librement une ville allemande'], horizontal=True)
@@ -495,28 +495,58 @@ def balanced_candidates(candidates, cap=60):
                 selected.append(buckets[category].pop(0))
     return selected
 
-def prioritize_local_candidates(candidates, cap=60):
-    """V3.6: proches d'abord, avec un quota de diversité; CSV avant Wikidata.
+def correct_category(place):
+    """Ne pas assimiler un site technique à un Gewerbegebiet entier."""
+    p = dict(place)
+    category = str(p.get('Catégorie', '')).casefold()
+    name = str(p.get('Nom', '')).casefold()
+    if any(t in category for t in ('gewerbegebiet', 'zone industrielle', 'zone d’activité')):
+        site_terms = ('winterdienst', 'stützpunkt', 'umspannwerk', 'kläranlage',
+                      'wasserwerk', 'pumpwerk', 'bauhof', 'recyclinghof',
+                      'wertstoffhof', 'deponie', 'heizkraftwerk', 'kraftwerk')
+        if any(term in name for term in site_terms):
+            p['Catégorie'] = 'Site technique / infrastructure (à vérifier)'
+    return p
 
-    Les trajets restent un échantillon, pas un inventaire exhaustif.
+
+def prioritize_local_candidates(candidates, cap=300, group='Professionnel (15 min)'):
+    """Priorité à la proximité et aux entreprises; repli Wikidata ensuite.
+
+    Les quotas empêchent les zones industrielles de masquer les entreprises.
+    Ce n'est pas une recherche exhaustive.
     """
+    candidates = [correct_category(p) for p in candidates]
     local = [p for p in candidates if str(p.get('Fiabilité', '')).startswith('Base locale')]
     remote = [p for p in candidates if not str(p.get('Fiabilité', '')).startswith('Base locale')]
-    selected = []
-    for pool in (local, remote):
-        available = cap - len(selected)
-        if available <= 0:
+    def ordered(pool):
+        if not group.startswith('Professionnel'):
+            return sorted(pool, key=lambda p: p['Distance directe (km)'])
+        def rank(p):
+            cat = str(p.get('Catégorie', '')).casefold()
+            if 'entreprise' in cat: tier = 0
+            elif any(x in cat for x in ('hôpital', 'université', 'recherche')): tier = 1
+            elif 'gewerbegebiet' in cat or 'zone d’activité' in cat: tier = 2
+            else: tier = 3
+            # Proximity remains decisive within each tier.
+            return (tier, p['Distance directe (km)'])
+        return sorted(pool, key=rank)
+    if not group.startswith('Professionnel'):
+        return (ordered(local) + ordered(remote))[:cap]
+    # Reserve at most 20% of the evaluation capacity for Gewerbegebiete;
+    # each industrial area is a context indicator, not an individual employer.
+    result = []
+    zone_limit = max(1, cap // 5)
+    zones = 0
+    for p in ordered(local) + ordered(remote):
+        cat = str(p.get('Catégorie', '')).casefold()
+        zone = 'gewerbegebiet' in cat or 'zone d’activité' in cat
+        if zone and zones >= zone_limit:
+            continue
+        result.append(p)
+        zones += int(zone)
+        if len(result) == cap:
             break
-        ordered = sorted(pool, key=lambda p: p['Distance directe (km)'])
-        # Réserver au maximum une place par catégorie; ensuite proximité pure.
-        categories = {}
-        for p in ordered:
-            categories.setdefault(p['Catégorie'], p)
-        reserve = list(categories.values())[:min(len(categories), max(1, available // 5))]
-        used = {id(p) for p in reserve}
-        selected.extend(reserve)
-        selected.extend(p for p in ordered if id(p) not in used and len(selected) < cap)
-    return selected[:cap]
+    return result
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -567,6 +597,8 @@ def audience_category(place, group):
             return 'Universités'
         if 'recherche' in category or 'laboratoire' in category:
             return 'Centres de recherche'
+        if 'site technique' in category:
+            return 'Sites techniques / infrastructures (à vérifier)'
         if 'entreprise' in category:
             return 'Entreprises potentielles (activité à vérifier)'
         return 'Autres lieux professionnels à vérifier'
@@ -625,8 +657,9 @@ def local_demand_places(lat, lon, group):
                           'Fiabilité': 'Base locale — activité non vérifiée'})
     return sorted(found, key=lambda x: x['Distance directe (km)']), f'Base locale : {len(found)} lieux dans le rayon ({len(subset)} fiches pour cette clientèle)'
 
-st.caption('V3.7 : base CSV locale (OSM et éventuel complément Overture), puis Wikidata. La couverture des entreprises reste partielle.')
-MAX_ROUTE_CANDIDATES = st.slider('Nombre maximum de lieux à contrôler par clientèle', min_value=60, max_value=300, value=200, step=20, help='Plus de lieux = meilleure couverture potentielle, mais calcul routier plus lent. Les résultats ne sont jamais exhaustifs.')
+st.caption('V3.8 : sélection automatique des candidats les plus proches, avec priorité aux établissements professionnels. Base actuelle : OSM + Wikidata ; Overture non encore intégré.')
+MAX_ROUTE_CANDIDATES = 300
+st.caption('Contrôle automatique : jusqu’à 300 candidats par clientèle. Ce plafond protège le service de calcul routier ; l’analyse reste partielle.')
 with st.expander('📂 Base de lieux locale — fonctionnement V3.4', expanded=False):
     st.write('Dépose un fichier `data/lieux_allemagne.csv` dans GitHub pour alimenter la recherche sans Overpass. Le fichier peut contenir des établissements de plusieurs régions allemandes.')
     st.write('Colonnes : `nom,categorie,lat,lon,source,public_cible` ; public_cible = `professionnel` ou `tourisme`. Les coordonnées doivent être réelles et les sources vérifiables.')
@@ -642,7 +675,7 @@ if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='deman
         for group, config in DEMAND_GROUPS.items():
             candidates, local_message = local_demand_places(*origin_key, group)
             diagnostics = [local_message]
-            source_name = 'Base locale (OSM/Overture si fusionné) + Wikidata' if candidates else 'Wikidata (base locale vide ou absente)'
+            source_name = 'Base locale OSM + Wikidata (Overture non intégré)' if candidates else 'Wikidata (base locale vide ou absente)'
             wikidata_candidates, fallback_diagnostics = discover_demand_places(*origin_key, group)
             diagnostics += fallback_diagnostics
             if wikidata_candidates:
@@ -658,7 +691,7 @@ if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='deman
             if not candidates:
                 report[group] = {'status': 'Aucun lieu documenté trouvé', 'rows': [], 'diagnostics': diagnostics}
                 continue
-            selected = prioritize_local_candidates(candidates, cap=MAX_ROUTE_CANDIDATES)
+            selected = prioritize_local_candidates(candidates, cap=MAX_ROUTE_CANDIDATES, group=group)
             local_tested = sum(str(p.get("Fiabilité", "")).startswith("Base locale") for p in selected)
             diagnostics.append(f"Sélection : {local_tested} fiches locales prioritaires sur {len(selected)} candidats testés")
             minutes, routing_diagnostics = driving_minutes_to_places(*origin_key,
@@ -731,7 +764,7 @@ if st.session_state.get('v34_origin') == (city, origin_key, MAX_ROUTE_CANDIDATES
             if result.get('status') != 'Partiel':
                 st.warning(result.get('status', 'Résultats indisponibles') + ' : aucun résultat ne peut être confirmé.')
                 continue
-            st.caption(f"Source : {result['source']} · {result['tested']} candidats évalués sur {result['candidates']} trouvés (plafond {MAX_ROUTE_CANDIDATES}). Résultats partiels.")
+            st.caption(f"Source : {result['source']} · {result['tested']} candidats évalués sur {result['candidates']} trouvés (plafond automatique {MAX_ROUTE_CANDIDATES}). Résultats partiels.")
             st.info(f"Base locale : {result.get('local_within', 0)} lieu(x) à {DEMAND_GROUPS[group]['minutes']} min maximum en voiture ; {result.get('local_outside', 0)} au-delà. Ce décompte ne mesure pas la demande Airbnb.")
             if result.get('checked_rows'):
                 with st.expander('🔎 Voir les candidats évalués et exclus', expanded=False):
