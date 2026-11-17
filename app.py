@@ -286,15 +286,15 @@ def record_service_issue(service, exc):
 # V2.8 : recherche OSM ciblée, avec repli Wikidata, puis contrôle routier OSRM.
 # Les données OSM sont contributives et incomplètes. Pas de promesse d'exhaustivité.
 st.divider()
-st.subheader('🏭🎪 Bassins de demande autour du logement — V2.8.1')
+st.subheader('🏭🎪 Bassins de demande autour du logement — V2.9')
 st.markdown('**Professionnel : 15 min maximum en voiture** · **Salons, attractions et loisirs : 50 min maximum en voiture**')
 st.caption('Départ : adresse géocodée si disponible, sinon centre approximatif de la commune. OSRM : temps hors trafic, sans stationnement. La recherche comprend les communes voisines.')
 
 DEMAND_GROUPS = {
     'Professionnel (15 min)': {'minutes': 15, 'radius_m': 18000, 'radius_km': 18,
-        'types': {'Q4830453': 'Entreprise', 'Q166210': 'Zone industrielle', 'Q16917': 'Hôpital', 'Q3918': 'Université'}},
+        'types': {'Q4830453': 'Entreprise', 'Q166210': 'Zone industrielle', 'Q16917': 'Hôpital', 'Q3918': 'Université', 'Q7315155': 'Centre de recherche'}},
     'Tourisme et événements (50 min)': {'minutes': 50, 'radius_m': 55000, 'radius_km': 55,
-        'types': {'Q1529128': 'Parc des expositions', 'Q33506': 'Musée', 'Q570116': 'Attraction touristique', 'Q3375722': 'Parc de loisirs'}},
+        'types': {'Q1529128': 'Parc des expositions', 'Q33506': 'Musée', 'Q570116': 'Attraction touristique', 'Q3375722': 'Parc de loisirs', 'Q24354': 'Théâtre'}},
 }
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -377,44 +377,67 @@ def osm_demand_places(lat, lon, group):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def discover_demand_places(lat, lon, group):
-    # Repli sur Wikidata si les serveurs OSM sont indisponibles.
+    """Recherche Wikidata par catégorie : évite qu'une catégorie monopolise le quota."""
     config = DEMAND_GROUPS[group]
     kinds = config['types']
-    values = ' '.join('wd:' + q for q in kinds)
-    query = f"""SELECT DISTINCT ?item ?itemLabel ?coord ?kind WHERE {{
-      SERVICE wikibase:around {{ ?item wdt:P625 ?coord .
-        bd:serviceParam wikibase:center 'Point({lon} {lat})'^^geo:wktLiteral .
-        bd:serviceParam wikibase:radius '{config['radius_km']}' . }}
-      VALUES ?kind {{ {values} }} ?item wdt:P31/wdt:P279? ?kind .
-      SERVICE wikibase:label {{ bd:serviceParam wikibase:language 'fr,de,en'. }}
-    }} LIMIT 120"""
-    try:
-        resp = requests.get('https://query.wikidata.org/sparql',
-            params={'query': query, 'format': 'json'},
-            headers={'User-Agent': 'ZeroToHostEducationalPilot/2.8 (github.com/Pendjo/zero-to-host-v2--test)',
-                     'Accept': 'application/sparql-results+json'}, timeout=(5, 18))
-        resp.raise_for_status()
-        bindings = resp.json()['results']['bindings']
-    except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
-        return None, [record_service_issue('Wikidata', exc)]
     found = {}
-    for entry in bindings:
+    diagnostics = []
+    successful = 0
+    for qid, category in kinds.items():
+        # Une requête par type avec quota indépendant. Les catégories restent partielles.
+        query = f"""SELECT DISTINCT ?item ?itemLabel ?coord WHERE {{
+          SERVICE wikibase:around {{ ?item wdt:P625 ?coord .
+            bd:serviceParam wikibase:center 'Point({lon} {lat})'^^geo:wktLiteral .
+            bd:serviceParam wikibase:radius '{config['radius_km']}' . }}
+          ?item wdt:P31/wdt:P279? wd:{qid} .
+          SERVICE wikibase:label {{ bd:serviceParam wikibase:language 'fr,de,en'. }}
+        }} LIMIT 35"""
         try:
-            uri = entry['item']['value']
-            qid = uri.rsplit('/', 1)[-1]
-            kind = entry['kind']['value'].rsplit('/', 1)[-1]
-            coords = re.fullmatch(r'Point\((-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)\)', entry['coord']['value'])
-            if not coords or kind not in kinds:
-                continue
-            lng, lt = map(float, coords.groups())
-            name = entry.get('itemLabel', {}).get('value', qid)
-            if name == qid:
-                continue
-            found[qid] = {'Nom': name, 'Catégorie': kinds[kind], 'lat': lt, 'lon': lng,
-                'Source': uri, 'Distance directe (km)': round(distance_km(lat, lon, lt, lng), 1)}
-        except (KeyError, ValueError, TypeError):
+            resp = requests.get('https://query.wikidata.org/sparql',
+                params={'query': query, 'format': 'json'},
+                headers={'User-Agent': 'ZeroToHostEducationalPilot/2.9 (github.com/Pendjo/zero-to-host-v2--test)',
+                         'Accept': 'application/sparql-results+json'}, timeout=(5, 20))
+            resp.raise_for_status()
+            bindings = resp.json()['results']['bindings']
+            successful += 1
+            diagnostics.append(f'Wikidata {category} : {len(bindings)} candidats reçus')
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+            diagnostics.append(record_service_issue('Wikidata ' + category, exc))
             continue
-    return sorted(found.values(), key=lambda x: x['Distance directe (km)']), ['Wikidata : réponse reçue']
+        for entry in bindings:
+            try:
+                uri = entry['item']['value']
+                item_qid = uri.rsplit('/', 1)[-1]
+                coords = re.fullmatch(r'Point\((-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)\)', entry['coord']['value'])
+                if not coords:
+                    continue
+                lng, lt = map(float, coords.groups())
+                name = entry.get('itemLabel', {}).get('value', item_qid)
+                if name == item_qid:
+                    continue
+                if item_qid not in found:
+                    found[item_qid] = {'Nom': name, 'Catégorie': category, 'lat': lt, 'lon': lng,
+                        'Source': uri, 'Distance directe (km)': round(distance_km(lat, lon, lt, lng), 1)}
+            except (KeyError, ValueError, TypeError):
+                continue
+    if not successful:
+        return None, diagnostics
+    return sorted(found.values(), key=lambda x: x['Distance directe (km)']), diagnostics
+
+
+def balanced_candidates(candidates, cap=60):
+    """Sélection par tours de catégories, puis proximité à l'intérieur de chaque catégorie."""
+    buckets = {}
+    for place in candidates:
+        buckets.setdefault(place['Catégorie'], []).append(place)
+    for bucket in buckets.values():
+        bucket.sort(key=lambda x: x['Distance directe (km)'])
+    selected = []
+    while len(selected) < cap and any(buckets.values()):
+        for category in list(buckets):
+            if buckets[category] and len(selected) < cap:
+                selected.append(buckets[category].pop(0))
+    return selected
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def driving_minutes_to_places(lat, lon, coordinates):
@@ -460,7 +483,7 @@ if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='deman
             if not candidates:
                 report[group] = {'status': 'Aucun lieu documenté trouvé', 'rows': [], 'diagnostics': diagnostics}
                 continue
-            selected = candidates[:60]
+            selected = balanced_candidates(candidates, cap=60)
             minutes, routing_diagnostics = driving_minutes_to_places(*origin_key,
                 tuple((r['lat'], r['lon']) for r in selected))
             diagnostics += routing_diagnostics
@@ -472,13 +495,13 @@ if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='deman
             report[group] = {'status': 'Partiel', 'rows': sorted(rows, key=lambda x: x['Trajet voiture (min)']),
                              'candidates': len(candidates), 'tested': len(selected), 'source': source_name,
                              'diagnostics': diagnostics}
-    st.session_state['v28_demand'] = report
-    st.session_state['v28_origin'] = origin_key
+    st.session_state['v29_demand'] = report
+    st.session_state['v29_origin'] = origin_key
 
-if st.session_state.get('v28_origin') == origin_key and st.session_state.get('v28_demand'):
-    for group, result in st.session_state['v28_demand'].items():
+if st.session_state.get('v29_origin') == origin_key and st.session_state.get('v29_demand'):
+    for group, result in st.session_state['v29_demand'].items():
         st.markdown(f'#### {group}')
-        with st.expander('🔧 Diagnostic des services (V2.8.1)', expanded=result['status'] != 'Partiel'):
+        with st.expander('🔧 Diagnostic des services (V2.9)', expanded=result['status'] != 'Partiel'):
             for message in result.get('diagnostics', []):
                 st.write('• ' + message)
             if not result.get('diagnostics'):
@@ -486,7 +509,7 @@ if st.session_state.get('v28_origin') == origin_key and st.session_state.get('v2
         if result['status'] != 'Partiel':
             st.warning(result['status'] + ' : aucun résultat ne peut être confirmé.')
             continue
-        st.caption(f"Source : {result['source']} · {result['tested']} candidats évalués sur {result['candidates']} trouvés (maximum 60). Résultats non exhaustifs.")
+        st.caption(f"Source : {result['source']} · {result['tested']} candidats évalués sur {result['candidates']} trouvés (maximum 60, répartis entre catégories). Résultats non exhaustifs.")
         if result['rows']:
             df = pd.DataFrame(result['rows'])
             st.dataframe(df[['Nom', 'Catégorie', 'Trajet voiture (min)', 'Distance directe (km)', 'Source']],
@@ -494,13 +517,13 @@ if st.session_state.get('v28_origin') == origin_key and st.session_state.get('v2
                 column_config={'Source': st.column_config.LinkColumn('Fiche source')})
             st.map(df, latitude='lat', longitude='lon', width='stretch')
             st.download_button('📥 Télécharger ce bassin (CSV)', df.to_csv(index=False).encode('utf-8-sig'),
-                file_name=('professionnel' if 'Professionnel' in group else 'tourisme') + '_v28.csv',
+                file_name=('professionnel' if 'Professionnel' in group else 'tourisme') + '_v29.csv',
                 mime='text/csv', key='csv_' + group)
         else:
             st.info('Aucun lieu retenu parmi les candidats évalués. Cela ne signifie pas absence de demande.')
 else:
     st.info('Clique sur « Rechercher les bassins de demande » pour lancer la recherche.')
-st.caption('⚠️ OpenStreetMap et Wikidata sont incomplets. Les zones industrielles ne correspondent pas nécessairement à des employeurs identifiés. Les lieux événementiels ne prouvent pas qu’un événement est programmé. Seuls les 60 premiers candidats par catégorie sont vérifiés ; aucune statistique Airbnb n’est calculée.')
+st.caption('⚠️ OpenStreetMap et Wikidata sont incomplets. Les zones industrielles ne correspondent pas nécessairement à des employeurs identifiés. Les lieux événementiels ne prouvent pas qu’un événement est programmé. Un échantillon équilibré de 60 candidats maximum par bassin est vérifié ; aucune statistique Airbnb n’est calculée.')
 
 comparison_radius = st.slider('Rayon identique pour comparer les villes (km)', 2, 15, 7, key='comparison_radius')
 if st.button('📊 Comparer les trois villes (Wikidata)', key='compare_cities'):
@@ -617,9 +640,9 @@ def build_pdf_report():
     line('Verification documentaire', record['date_verification'])
     line('Source juridique', record['source'])
     line('Observation juridique', record['remarque'])
-    if st.session_state.get('v28_origin') == origin_key and st.session_state.get('v28_demand'):
+    if st.session_state.get('v29_origin') == origin_key and st.session_state.get('v29_demand'):
         story.append(Paragraph('Bassins de demande V2.8 (resultats partiels)', styles['Heading2']))
-        for group, result in st.session_state['v28_demand'].items():
+        for group, result in st.session_state['v29_demand'].items():
             line(group, f"{len(result['rows'])} lieux avec trajet confirme ; statut : {result['status']}")
         line('Methode', 'OpenStreetMap ou Wikidata partiel ; trajet routier OSRM hors trafic ; maximum 60 candidats par bassin')
     story.append(Spacer(1, 10))
