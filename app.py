@@ -283,15 +283,15 @@ def record_service_issue(service, exc):
     LOGGER.warning('%s — %s', service, message)
     return f'{service} : {message}'
 
-# V2.8 : recherche OSM ciblée, avec repli Wikidata, puis contrôle routier OSRM.
+# V3.0 : recherche OSM ciblée, avec repli Wikidata, puis contrôle routier OSRM.
 # Les données OSM sont contributives et incomplètes. Pas de promesse d'exhaustivité.
 st.divider()
-st.subheader('🏭🎪 Bassins de demande autour du logement — V2.9')
+st.subheader('🏭🎪 Bassins de demande autour du logement — V3.0')
 st.markdown('**Professionnel : 15 min maximum en voiture** · **Salons, attractions et loisirs : 50 min maximum en voiture**')
 st.caption('Départ : adresse géocodée si disponible, sinon centre approximatif de la commune. OSRM : temps hors trafic, sans stationnement. La recherche comprend les communes voisines.')
 
 DEMAND_GROUPS = {
-    'Professionnel (15 min)': {'minutes': 15, 'radius_m': 18000, 'radius_km': 18,
+    'Professionnel (15 min)': {'minutes': 15, 'radius_m': 14000, 'radius_km': 18,
         'types': {'Q4830453': 'Entreprise', 'Q166210': 'Zone industrielle', 'Q16917': 'Hôpital', 'Q3918': 'Université', 'Q7315155': 'Centre de recherche'}},
     'Tourisme et événements (50 min)': {'minutes': 50, 'radius_m': 55000, 'radius_km': 55,
         'types': {'Q1529128': 'Parc des expositions', 'Q33506': 'Musée', 'Q570116': 'Attraction touristique', 'Q3375722': 'Parc de loisirs', 'Q24354': 'Théâtre'}},
@@ -302,33 +302,40 @@ def osm_demand_places(lat, lon, group):
     """Récupère un échantillon documenté de lieux OSM ; None = source indisponible."""
     radius = DEMAND_GROUPS[group]['radius_m']
     if group.startswith('Professionnel'):
+        # Priorité aux employeurs identifiables et aux zones d'activité nommées.
+        # Éviter les recherches globales de tous les bâtiments industriels.
         filters = [
-            'way["landuse"="industrial"]', 'way["landuse"="commercial"]',
-            'nwr["office"="company"]', 'nwr["office"="corporate"]',
-            'nwr["industrial"]', 'nwr["building"="industrial"]["name"]',
-            'nwr["healthcare"="hospital"]', 'nwr["amenity"="hospital"]',
-            'nwr["amenity"="university"]', 'nwr["office"="research"]',
+            'way["landuse"="industrial"]["name"]',
+            'way["landuse"="commercial"]["name"]',
+            'nwr["office"="company"]["name"]',
+            'nwr["office"="corporate"]["name"]',
+            'nwr["industrial"]["name"]',
+            'nwr["man_made"="works"]["name"]',
+            'nwr["craft"]["name"]',
+            'nwr["amenity"="hospital"]["name"]',
+            'nwr["amenity"="university"]["name"]',
+            'nwr["office"="research"]["name"]',
         ]
     else:
         filters = [
             'nwr["amenity"="conference_centre"]', 'nwr["amenity"="events_venue"]',
             'nwr["amenity"="theatre"]', 'nwr["tourism"="museum"]',
             'nwr["tourism"="attraction"]', 'nwr["tourism"="theme_park"]',
-            'nwr["leisure"="amusement_arcade"]', 'nwr["leisure"="water_park"]',
-            'nwr["tourism"="zoo"]', 'nwr["historic"="castle"]',
+            'nwr["leisure"="water_park"]', 'nwr["tourism"="zoo"]',
+            'nwr["historic"="castle"]',
         ]
-    # Sélection de catégories ciblées, sans télécharger tous les commerces d'une région.
     statements = ''.join(f'{f}(around:{radius},{lat},{lon});' for f in filters)
-    query = f'[out:json][timeout:22];({statements});out center 550;'
-    endpoints = ['https://overpass.kumi.systems/api/interpreter',
-                 'https://overpass.nchc.org.tw/api/interpreter',
-                 'https://overpass-api.de/api/interpreter']
+    # 2 étapes : réponse légère, sans géométrie complète.
+    query = f'[out:json][timeout:20];({statements});out center 350;'
+    endpoints = ['https://overpass-api.de/api/interpreter',
+                 'https://overpass.kumi.systems/api/interpreter',
+                 'https://overpass.nchc.org.tw/api/interpreter']
     payload = None
     diagnostics = []
     for endpoint in endpoints:
         try:
             response = requests.post(endpoint, data={'data': query},
-                headers={'User-Agent': 'ZeroToHostEducationalPilot/2.8 (OSM research)'}, timeout=(5, 28))
+                headers={'User-Agent': 'ZeroToHostEducationalPilot/3.0 (OSM research; contact github.com/Pendjo/zero-to-host-v2--test)'}, timeout=(5, 25))
             response.raise_for_status()
             payload = response.json()
             if isinstance(payload, dict) and isinstance(payload.get('elements'), list):
@@ -395,7 +402,7 @@ def discover_demand_places(lat, lon, group):
         try:
             resp = requests.get('https://query.wikidata.org/sparql',
                 params={'query': query, 'format': 'json'},
-                headers={'User-Agent': 'ZeroToHostEducationalPilot/2.9 (github.com/Pendjo/zero-to-host-v2--test)',
+                headers={'User-Agent': 'ZeroToHostEducationalPilot/3.0 (github.com/Pendjo/zero-to-host-v2--test)',
                          'Accept': 'application/sparql-results+json'}, timeout=(5, 20))
             resp.raise_for_status()
             bindings = resp.json()['results']['bindings']
@@ -415,6 +422,11 @@ def discover_demand_places(lat, lon, group):
                 name = entry.get('itemLabel', {}).get('value', item_qid)
                 if name == item_qid:
                     continue
+                # Un cinéma, théâtre ou lieu de divertissement ne doit pas être
+                # présenté comme un employeur industriel sur la seule base de P31.
+                if group.startswith('Professionnel') and category == 'Entreprise':
+                    if re.search(r'kino|cinema|cineplex|filmtheater|kinocenter|lichtspiel', name, re.I):
+                        continue
                 if item_qid not in found:
                     found[item_qid] = {'Nom': name, 'Catégorie': category, 'lat': lt, 'lon': lng,
                         'Source': uri, 'Distance directe (km)': round(distance_km(lat, lon, lt, lng), 1)}
@@ -495,13 +507,13 @@ if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='deman
             report[group] = {'status': 'Partiel', 'rows': sorted(rows, key=lambda x: x['Trajet voiture (min)']),
                              'candidates': len(candidates), 'tested': len(selected), 'source': source_name,
                              'diagnostics': diagnostics}
-    st.session_state['v29_demand'] = report
-    st.session_state['v29_origin'] = origin_key
+    st.session_state['v30_demand'] = report
+    st.session_state['v30_origin'] = origin_key
 
-if st.session_state.get('v29_origin') == origin_key and st.session_state.get('v29_demand'):
-    for group, result in st.session_state['v29_demand'].items():
+if st.session_state.get('v30_origin') == origin_key and st.session_state.get('v30_demand'):
+    for group, result in st.session_state['v30_demand'].items():
         st.markdown(f'#### {group}')
-        with st.expander('🔧 Diagnostic des services (V2.9)', expanded=result['status'] != 'Partiel'):
+        with st.expander('🔧 Diagnostic des services (V3.0)', expanded=result['status'] != 'Partiel'):
             for message in result.get('diagnostics', []):
                 st.write('• ' + message)
             if not result.get('diagnostics'):
@@ -517,13 +529,13 @@ if st.session_state.get('v29_origin') == origin_key and st.session_state.get('v2
                 column_config={'Source': st.column_config.LinkColumn('Fiche source')})
             st.map(df, latitude='lat', longitude='lon', width='stretch')
             st.download_button('📥 Télécharger ce bassin (CSV)', df.to_csv(index=False).encode('utf-8-sig'),
-                file_name=('professionnel' if 'Professionnel' in group else 'tourisme') + '_v29.csv',
+                file_name=('professionnel' if 'Professionnel' in group else 'tourisme') + '_v30.csv',
                 mime='text/csv', key='csv_' + group)
         else:
             st.info('Aucun lieu retenu parmi les candidats évalués. Cela ne signifie pas absence de demande.')
 else:
     st.info('Clique sur « Rechercher les bassins de demande » pour lancer la recherche.')
-st.caption('⚠️ OpenStreetMap et Wikidata sont incomplets. Les zones industrielles ne correspondent pas nécessairement à des employeurs identifiés. Les lieux événementiels ne prouvent pas qu’un événement est programmé. Un échantillon équilibré de 60 candidats maximum par bassin est vérifié ; aucune statistique Airbnb n’est calculée.')
+st.caption('⚠️ La recherche OSM dépend de serveurs Overpass publics et peut encore échouer. Wikidata ne recense pas toutes les PME. OpenStreetMap et Wikidata sont incomplets. Les zones industrielles ne correspondent pas nécessairement à des employeurs identifiés. Les lieux événementiels ne prouvent pas qu’un événement est programmé. Un échantillon équilibré de 60 candidats maximum par bassin est vérifié ; aucune statistique Airbnb n’est calculée.')
 
 comparison_radius = st.slider('Rayon identique pour comparer les villes (km)', 2, 15, 7, key='comparison_radius')
 if st.button('📊 Comparer les trois villes (Wikidata)', key='compare_cities'):
@@ -640,9 +652,9 @@ def build_pdf_report():
     line('Verification documentaire', record['date_verification'])
     line('Source juridique', record['source'])
     line('Observation juridique', record['remarque'])
-    if st.session_state.get('v29_origin') == origin_key and st.session_state.get('v29_demand'):
+    if st.session_state.get('v30_origin') == origin_key and st.session_state.get('v30_demand'):
         story.append(Paragraph('Bassins de demande V2.8 (resultats partiels)', styles['Heading2']))
-        for group, result in st.session_state['v29_demand'].items():
+        for group, result in st.session_state['v30_demand'].items():
             line(group, f"{len(result['rows'])} lieux avec trajet confirme ; statut : {result['status']}")
         line('Methode', 'OpenStreetMap ou Wikidata partiel ; trajet routier OSRM hors trafic ; maximum 60 candidats par bassin')
     story.append(Spacer(1, 10))
