@@ -1,0 +1,272 @@
+[
+  {
+    "ville": "Leonberg",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "https://www.leonberg.de/",
+    "date_verification": "2026-10-28",
+    "remarque": "Demander confirmation écrite au service compétent. Vérifier séparément la Nutzungsänderung."
+  },
+  {
+    "ville": "Ditzingen",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "https://www.ditzingen.de/",
+    "date_verification": "2026-10-28",
+    "remarque": "Demander confirmation écrite au service compétent. Vérifier séparément la Nutzungsänderung."
+  },
+  {
+    "ville": "Rutesheim",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "https://www.rutesheim.de/",
+    "date_verification": "2026-10-28",
+    "remarque": "Demander confirmation écrite au service compétent. Vérifier séparément la Nutzungsänderung."
+  },
+  {
+    "ville": "Stuttgart",
+    "region": "Baden-Württemberg",
+    "statut": "Satzung confirmée",
+    "satzung": "Oui, prolongée jusqu’au 31 décembre 2030",
+    "source": "https://www.stuttgart.de/leben/bauen/baurecht/zweckentfremdung",
+    "date_verification": "2026-10-28",
+    "remarque": "Une autorisation peut être nécessaire. Vérifier les conditions précises et la Nutzungsänderung."
+  },
+  {
+    "ville": "Mannheim",
+    "region": "Baden-Württemberg",
+    "statut": "Satzung confirmée",
+    "satzung": "Oui, en vigueur jusqu’au 13 octobre 2031",
+    "source": "https://www.mannheim.de/de/nachrichten/mannheim-verlaengert-zweckentfremdungsverbot-fuer-wohnraum",
+    "date_verification": "2026-10-28",
+    "remarque": "La réglementation prévoit des contrôles et procédures d’autorisation. Vérifier le cas particulier."
+  },
+  {
+    "ville": "Gerlingen",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Korntal-Münchingen",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Weil der Stadt",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Renningen",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Sindelfingen",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Böblingen",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Vaihingen an der Enz",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Ludwigsburg",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Kornwestheim",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Fellbach",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Waiblingen",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Esslingen am Neckar",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Filderstadt",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Leinfelden-Echterdingen",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Herrenberg",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Tübingen",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Reutlingen",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Pforzheim",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Karlsruhe",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Heilbronn",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Göppingen",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Backnang",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Bietigheim-Bissingen",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Schwieberdingen",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  },
+  {
+    "ville": "Calw",
+    "region": "Baden-Württemberg",
+    "statut": "À confirmer auprès de la mairie",
+    "satzung": "Non vérifiée",
+    "source": "",
+    "date_verification": "",
+    "remarque": "Vérification réglementaire non effectuée. Consulter la commune et le Bauamt ; vérifier la Nutzungsänderung et obtenir l’accord écrit du propriétaire."
+  }
+]
