@@ -15,8 +15,8 @@ if not DATA_PATH.exists():
     st.stop()
 DATA = json.loads(DATA_PATH.read_text(encoding='utf-8'))
 CITIES = {row['ville']: row for row in DATA}
-st.title('🏠 Zero to Host — V2.6.1 pilote')
-st.caption('Recherche libre en Allemagne, carte, trajets pilotes, Wikidata, réglementation et PDF · sans Overpass')
+st.title('🏠 Zero to Host — V2.7 pilote')
+st.caption('Recherche libre, zones accessibles en voiture, Wikidata, réglementation, rentabilité et PDF')
 st.warning('Prototype autonome : ne remplace pas votre application actuelle. Ne constitue pas un avis juridique.')
 mode = st.radio('Mode de recherche', ['Ville enregistrée', 'Saisir librement une ville allemande'], horizontal=True)
 if mode == 'Ville enregistrée':
@@ -256,6 +256,157 @@ def distance_km(lat1, lon1, lat2, lon2):
     h = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
     return 6371.0088 * 2 * math.asin(min(1, math.sqrt(h)))
 
+
+# V2.7 : deux bassins de demande calculés en temps de trajet automobile.
+# Wikidata sert à découvrir des candidats (non exhaustifs), OSRM vérifie la durée routière.
+# La recherche est limitée en nombre pour protéger les services publics.
+st.divider()
+st.subheader('🏭🎪 Bassins de demande autour du logement')
+st.markdown('**Professionnel : 15 min maximum en voiture** · **Salons, attractions et loisirs : 50 min maximum en voiture**')
+st.caption('Départ : adresse géocodée si disponible, sinon centre approximatif de la commune. Les durées OSRM excluent le trafic, les horaires et le stationnement. La recherche couvre aussi les communes voisines.')
+
+DEMAND_GROUPS = {
+    'Professionnel (15 min)': {
+        'minutes': 15, 'radius_km': 25,
+        'types': {
+            'Q4830453': 'Entreprise',
+            'Q166210': 'Zone industrielle',
+            'Q16917': 'Hôpital',
+            'Q55488': 'Gare ferroviaire',
+            'Q3918': 'Université',
+        },
+    },
+    'Tourisme et événements (50 min)': {
+        'minutes': 50, 'radius_km': 90,
+        'types': {
+            'Q1529128': 'Parc des expositions',
+            'Q33506': 'Musée',
+            'Q570116': 'Attraction touristique',
+            'Q3375722': 'Parc de loisirs',
+            'Q194195': 'Amphithéâtre / lieu de spectacle',
+            'Q16970': 'Église / patrimoine',
+        },
+    },
+}
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def discover_demand_places(lat, lon, group):
+    config = DEMAND_GROUPS[group]
+    kinds = config['types']
+    values = ' '.join('wd:' + q for q in kinds)
+    query = f"""
+    SELECT DISTINCT ?item ?itemLabel ?coord ?kind WHERE {{
+      SERVICE wikibase:around {{
+        ?item wdt:P625 ?coord .
+        bd:serviceParam wikibase:center 'Point({lon} {lat})'^^geo:wktLiteral .
+        bd:serviceParam wikibase:radius '{config['radius_km']}' .
+      }}
+      VALUES ?kind {{ {values} }}
+      ?item wdt:P31/wdt:P279? ?kind .
+      SERVICE wikibase:label {{ bd:serviceParam wikibase:language 'fr,de,en'. }}
+    }} LIMIT 200
+    """
+    try:
+        resp = requests.get('https://query.wikidata.org/sparql',
+            params={'query': query, 'format': 'json'},
+            headers={'User-Agent': 'ZeroToHostEducationalPilot/2.7 (github.com/Pendjo/zero-to-host-v2--test)',
+                     'Accept': 'application/sparql-results+json'}, timeout=(6, 24))
+        resp.raise_for_status()
+        bindings = resp.json()['results']['bindings']
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        return None
+    found = {}
+    for entry in bindings:
+        try:
+            uri = entry['item']['value']
+            qid = uri.rsplit('/', 1)[-1]
+            kind = entry['kind']['value'].rsplit('/', 1)[-1]
+            coords = re.fullmatch(r'Point\((-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)\)', entry['coord']['value'])
+            if not coords or kind not in kinds:
+                continue
+            lng, lt = map(float, coords.groups())
+            name = entry.get('itemLabel', {}).get('value', qid)
+            if name == qid:
+                continue
+            if qid not in found:
+                found[qid] = {'Nom': name, 'Catégorie': kinds[kind], 'lat': lt, 'lon': lng,
+                              'Source': uri, 'Distance directe (km)': round(distance_km(lat, lon, lt, lng), 1)}
+        except (KeyError, ValueError, TypeError):
+            continue
+    return sorted(found.values(), key=lambda x: x['Distance directe (km)'])
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def driving_minutes_to_places(lat, lon, coordinates):
+    # Une requête OSRM Table par petit lot ; None si le service est indisponible.
+    if not coordinates:
+        return []
+    output = []
+    for offset in range(0, len(coordinates), 30):
+        chunk = coordinates[offset:offset + 30]
+        route_coords = ';'.join([f'{lon},{lat}'] + [f'{p[1]},{p[0]}' for p in chunk])
+        try:
+            resp = requests.get('https://router.project-osrm.org/table/v1/driving/' + route_coords,
+                params={'sources': '0', 'annotations': 'duration'},
+                headers={'User-Agent': 'ZeroToHostEducationalPilot/2.7'}, timeout=(5, 20))
+            resp.raise_for_status()
+            payload = resp.json()
+            if payload.get('code') != 'Ok':
+                return None
+            durations = payload['durations'][0][1:]
+            if len(durations) != len(chunk):
+                return None
+            output.extend([round(t / 60, 1) if t is not None else None for t in durations])
+        except (requests.RequestException, ValueError, KeyError, IndexError, TypeError):
+            return None
+    return output
+
+origin_key = (round(start_point[0], 5), round(start_point[1], 5))
+if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='demand_search'):
+    report = {}
+    with st.spinner('Recherche des lieux et vérification des trajets routiers…'):
+        for group, config in DEMAND_GROUPS.items():
+            candidates = discover_demand_places(*origin_key, group)
+            if candidates is None:
+                report[group] = {'status': 'Recherche Wikidata indisponible', 'rows': []}
+                continue
+            # Limite volontaire : seuls les 60 lieux les plus proches à vol d'oiseau sont évalués.
+            selected = candidates[:60]
+            minutes = driving_minutes_to_places(*origin_key,
+                tuple((r['lat'], r['lon']) for r in selected))
+            if minutes is None:
+                report[group] = {'status': 'Calcul routier indisponible', 'rows': []}
+                continue
+            rows = []
+            for place, mins in zip(selected, minutes):
+                if mins is not None and mins <= config['minutes']:
+                    rows.append({**place, 'Trajet voiture (min)': mins})
+            report[group] = {'status': 'Partiel', 'rows': sorted(rows, key=lambda x: x['Trajet voiture (min)']),
+                             'candidates': len(candidates), 'tested': len(selected)}
+    st.session_state['v27_demand'] = report
+    st.session_state['v27_origin'] = origin_key
+
+if st.session_state.get('v27_origin') == origin_key and st.session_state.get('v27_demand'):
+    for group, result in st.session_state['v27_demand'].items():
+        st.markdown(f'#### {group}')
+        if result['status'] != 'Partiel':
+            st.warning(result['status'] + ' : aucun résultat ne peut être confirmé.')
+            continue
+        st.caption(f"{result['tested']} lieux candidats évalués sur {result['candidates']} trouvés dans Wikidata (maximum 60). Résultats non exhaustifs.")
+        if result['rows']:
+            df = pd.DataFrame(result['rows'])
+            st.dataframe(df[['Nom', 'Catégorie', 'Trajet voiture (min)', 'Distance directe (km)', 'Source']],
+                         hide_index=True, use_container_width=True,
+                         column_config={'Source': st.column_config.LinkColumn('Fiche source')})
+            st.map(df, latitude='lat', longitude='lon', use_container_width=True)
+            st.download_button('📥 Télécharger ce bassin (CSV)', df.to_csv(index=False).encode('utf-8-sig'),
+                               file_name=('professionnel' if 'Professionnel' in group else 'tourisme') + '_v27.csv',
+                               mime='text/csv', key='csv_' + group)
+        else:
+            st.info('Aucun lieu documenté parmi les candidats vérifiés dans le temps imparti. Cela ne signifie pas absence de demande.')
+else:
+    st.info('Clique sur « Rechercher les bassins de demande » pour calculer les trajets depuis le point de référence.')
+st.caption('⚠️ Entreprises : Wikidata recense surtout des organisations notables, pas toutes les PME ni tous les Gewerbegebiete. Événements : les lieux ne prouvent pas qu’un salon ou concert est programmé. Aucune recherche exhaustive des événements datés n’est réalisée dans cette version.')
+
 comparison_radius = st.slider('Rayon identique pour comparer les villes (km)', 2, 15, 7, key='comparison_radius')
 if st.button('📊 Comparer les trois villes (Wikidata)', key='compare_cities'):
     compared, details = [], []
@@ -360,7 +511,7 @@ def build_pdf_report():
     output = io.BytesIO()
     doc = SimpleDocTemplate(output, pagesize=(595, 842), rightMargin=42, leftMargin=42, topMargin=45, bottomMargin=45)
     styles = getSampleStyleSheet()
-    story = [Paragraph('Zero to Host - Rapport de localisation V2.6', styles['Title']), Spacer(1, 12)]
+    story = [Paragraph('Zero to Host - Rapport de localisation V2.7', styles['Title']), Spacer(1, 12)]
     def line(label, value):
         story.append(Paragraph(f'<b>{escape(str(label))} :</b> {escape(str(value))}', styles['BodyText']))
         story.append(Spacer(1, 6))
@@ -371,6 +522,11 @@ def build_pdf_report():
     line('Verification documentaire', record['date_verification'])
     line('Source juridique', record['source'])
     line('Observation juridique', record['remarque'])
+    if st.session_state.get('v27_origin') == origin_key and st.session_state.get('v27_demand'):
+        story.append(Paragraph('Bassins de demande (resultats partiels)', styles['Heading2']))
+        for group, result in st.session_state['v27_demand'].items():
+            line(group, f"{len(result['rows'])} lieux avec trajet confirme ; statut : {result['status']}")
+        line('Methode', 'Wikidata partiel ; trajet routier OSRM hors trafic ; maximum 60 candidats par bassin')
     story.append(Spacer(1, 10))
     story.append(Paragraph('Hypotheses de rentabilite', styles['Heading2']))
     for label, val in [
@@ -398,7 +554,7 @@ def build_pdf_report():
 
 try:
     pdf_bytes = build_pdf_report()
-    st.download_button('📄 Télécharger le rapport PDF V2.6', pdf_bytes, file_name=f'zero_to_host_v26_{re.sub(r'[^a-z0-9_-]', '_', city.lower())}.pdf', mime='application/pdf')
+    st.download_button('📄 Télécharger le rapport PDF V2.7', pdf_bytes, file_name=f'zero_to_host_v27_{re.sub(r'[^a-z0-9_-]', '_', city.lower())}.pdf', mime='application/pdf')
 except ImportError:
     st.error('Pour activer le PDF, ajoute reportlab dans requirements.txt de ton dépôt GitHub.')
 except Exception as exc:
