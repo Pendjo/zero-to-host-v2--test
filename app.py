@@ -286,7 +286,7 @@ def record_service_issue(service, exc):
 # V3.0 : recherche OSM ciblée, avec repli Wikidata, puis contrôle routier OSRM.
 # Les données OSM sont contributives et incomplètes. Pas de promesse d'exhaustivité.
 st.divider()
-st.subheader('🏭🎪 Bassins de demande autour du logement — V3.0')
+st.subheader('🏭🎪 Bassins de demande autour du logement — V3.1')
 st.markdown('**Professionnel : 15 min maximum en voiture** · **Salons, attractions et loisirs : 50 min maximum en voiture**')
 st.caption('Départ : adresse géocodée si disponible, sinon centre approximatif de la commune. OSRM : temps hors trafic, sans stationnement. La recherche comprend les communes voisines.')
 
@@ -478,6 +478,41 @@ def driving_minutes_to_places(lat, lon, coordinates):
             return None, diagnostics + [record_service_issue('OSRM', exc)]
     return output, diagnostics + [f'OSRM : {len(output)} trajets évalués']
 
+# V3.1 : lecture pédagogique par clientèle. Une fiche OSM/Wikidata n'est pas
+# une preuve d'activité, d'effectifs, de fréquentation ou de demande Airbnb.
+LEISURE_TERMS = ('cinema', 'cinéma', 'cineplex', 'cine', 'kino', 'lichtburg',
+                 'filmstudio', 'theater', 'theatre', 'théâtre', 'museum', 'musée',
+                 'alhambra', 'multiplex', 'schauspielhaus')
+
+def audience_category(place, group):
+    name = str(place.get('Nom', '')).casefold()
+    category = str(place.get('Catégorie', '')).casefold()
+    if group.startswith('Professionnel'):
+        if any(term in name for term in LEISURE_TERMS):
+            return 'À vérifier — loisir/spectacle (hors cible professionnelle)'
+        if 'gewerbegebiet' in category or 'zone industrielle' in category or 'zone d’activité' in category:
+            return 'Zones d’activité / Gewerbegebiete'
+        if 'hôpital' in category:
+            return 'Hôpitaux'
+        if 'université' in category:
+            return 'Universités'
+        if 'recherche' in category or 'laboratoire' in category:
+            return 'Centres de recherche'
+        if 'entreprise' in category:
+            return 'Entreprises potentielles (activité à vérifier)'
+        return 'Autres lieux professionnels à vérifier'
+    if 'exposition' in category or 'congrès' in category or 'salon' in category:
+        return 'Salons / congrès (lieux, pas événements datés)'
+    if 'musée' in category:
+        return 'Musées'
+    if 'spectacle' in category or 'théâtre' in category:
+        return 'Spectacles / théâtres'
+    if 'loisir' in category or 'parc' in category:
+        return 'Parcs et loisirs'
+    if 'patrimoine' in category:
+        return 'Patrimoine'
+    return 'Attractions touristiques'
+
 origin_key = (round(start_point[0], 5), round(start_point[1], 5))
 if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='demand_search'):
     report = {}
@@ -502,7 +537,9 @@ if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='deman
             if minutes is None:
                 report[group] = {'status': 'Calcul routier indisponible', 'rows': [], 'diagnostics': diagnostics}
                 continue
-            rows = [{**place, 'Trajet voiture (min)': mins} for place, mins in zip(selected, minutes)
+            rows = [{**place, 'Trajet voiture (min)': mins,
+                     'Sous-catégorie V3.1': audience_category(place, group)}
+                    for place, mins in zip(selected, minutes)
                     if mins is not None and mins <= config['minutes']]
             report[group] = {'status': 'Partiel', 'rows': sorted(rows, key=lambda x: x['Trajet voiture (min)']),
                              'candidates': len(candidates), 'tested': len(selected), 'source': source_name,
@@ -511,31 +548,53 @@ if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='deman
     st.session_state['v30_origin'] = origin_key
 
 if st.session_state.get('v30_origin') == origin_key and st.session_state.get('v30_demand'):
-    for group, result in st.session_state['v30_demand'].items():
-        st.markdown(f'#### {group}')
-        with st.expander('🔧 Diagnostic des services (V3.0)', expanded=result['status'] != 'Partiel'):
-            for message in result.get('diagnostics', []):
-                st.write('• ' + message)
-            if not result.get('diagnostics'):
-                st.info('Aucun diagnostic enregistré.')
-        if result['status'] != 'Partiel':
-            st.warning(result['status'] + ' : aucun résultat ne peut être confirmé.')
-            continue
-        st.caption(f"Source : {result['source']} · {result['tested']} candidats évalués sur {result['candidates']} trouvés (maximum 60, répartis entre catégories). Résultats non exhaustifs.")
-        if result['rows']:
+    report = st.session_state['v30_demand']
+    st.markdown('### Deux clientèles, deux analyses distinctes')
+    st.caption('Un lieu référencé est un indice de contexte, pas une preuve de nuitées vendues. Les trajets OSRM sont hors trafic.')
+    tab_pro, tab_tour = st.tabs(['🏭 Monteure & Geschäftsreisende · 15 min',
+                                '🎪 Touristes, familles & événements · 50 min'])
+    for tab, group in zip((tab_pro, tab_tour), DEMAND_GROUPS):
+        with tab:
+            result = report.get(group, {})
+            st.markdown('#### ' + group)
+            if group.startswith('Professionnel'):
+                st.caption('Cibles : entreprises, zones d’activité, hôpitaux, universités et recherche. Les emplois, chantiers et déplacements professionnels ne sont pas mesurés.')
+            else:
+                st.caption('Cibles : salons, congrès, spectacles, attractions et loisirs. Les événements programmés et leur fréquentation ne sont pas vérifiés.')
+            with st.expander('🔧 Diagnostic des services (V3.1)', expanded=result.get('status') != 'Partiel'):
+                for message in result.get('diagnostics', []):
+                    st.write('• ' + message)
+                if not result.get('diagnostics'):
+                    st.info('Aucun diagnostic enregistré.')
+            if result.get('status') != 'Partiel':
+                st.warning(result.get('status', 'Résultats indisponibles') + ' : aucun résultat ne peut être confirmé.')
+                continue
+            st.caption(f"Source : {result['source']} · {result['tested']} candidats évalués sur {result['candidates']} trouvés (maximum 60). Résultats partiels.")
+            if not result.get('rows'):
+                st.info('Aucun lieu retenu parmi les candidats évalués. Cela ne signifie pas absence de demande.')
+                continue
             df = pd.DataFrame(result['rows'])
-            st.dataframe(df[['Nom', 'Catégorie', 'Trajet voiture (min)', 'Distance directe (km)', 'Source']],
-                hide_index=True, width='stretch',
-                column_config={'Source': st.column_config.LinkColumn('Fiche source')})
-            st.map(df, latitude='lat', longitude='lon', width='stretch')
-            st.download_button('📥 Télécharger ce bassin (CSV)', df.to_csv(index=False).encode('utf-8-sig'),
-                file_name=('professionnel' if 'Professionnel' in group else 'tourisme') + '_v30.csv',
-                mime='text/csv', key='csv_' + group)
-        else:
-            st.info('Aucun lieu retenu parmi les candidats évalués. Cela ne signifie pas absence de demande.')
+            if 'Sous-catégorie V3.1' not in df.columns:
+                df['Sous-catégorie V3.1'] = [audience_category(r, group) for r in result['rows']]
+            excluded = df['Sous-catégorie V3.1'].str.startswith('À vérifier — loisir')
+            if group.startswith('Professionnel') and excluded.any():
+                st.warning(f"{int(excluded.sum())} lieu(x) de loisirs/spectacles écarté(s) de la synthèse professionnelle ; consulter l'export pour les vérifier.")
+            shown = df.loc[~excluded].copy() if group.startswith('Professionnel') else df
+            if shown.empty:
+                st.info('Aucun lieu professionnel clairement classé dans cet échantillon.')
+            else:
+                st.markdown('**Répartition des lieux identifiés**')
+                summary = shown.groupby('Sous-catégorie V3.1').size().reset_index(name='Lieux référencés')
+                st.dataframe(summary, hide_index=True, width='stretch')
+                st.dataframe(shown[['Nom', 'Sous-catégorie V3.1', 'Catégorie', 'Trajet voiture (min)', 'Distance directe (km)', 'Source']],
+                    hide_index=True, width='stretch', column_config={'Source': st.column_config.LinkColumn('Fiche source')})
+                st.map(shown, latitude='lat', longitude='lon', width='stretch')
+            st.download_button('📥 Télécharger cette analyse (CSV)', df.to_csv(index=False).encode('utf-8-sig'),
+                file_name=('professionnel' if group.startswith('Professionnel') else 'tourisme') + '_v31.csv',
+                mime='text/csv', key='csv_v31_' + group)
 else:
-    st.info('Clique sur « Rechercher les bassins de demande » pour lancer la recherche.')
-st.caption('⚠️ La recherche OSM dépend de serveurs Overpass publics et peut encore échouer. Wikidata ne recense pas toutes les PME. OpenStreetMap et Wikidata sont incomplets. Les zones industrielles ne correspondent pas nécessairement à des employeurs identifiés. Les lieux événementiels ne prouvent pas qu’un événement est programmé. Un échantillon équilibré de 60 candidats maximum par bassin est vérifié ; aucune statistique Airbnb n’est calculée.')
+    st.info('Clique sur « Rechercher les bassins de demande » pour lancer les deux analyses séparées.')
+st.caption('⚠️ Sources publiques partielles : Wikidata peut classer des cinémas comme entreprises ; les catégories sont indicatives. Overpass peut être indisponible. Aucun taux d’occupation ni revenu Airbnb n’est déduit de ces lieux.')
 
 comparison_radius = st.slider('Rayon identique pour comparer les villes (km)', 2, 15, 7, key='comparison_radius')
 if st.button('📊 Comparer les trois villes (Wikidata)', key='compare_cities'):
@@ -653,7 +712,7 @@ def build_pdf_report():
     line('Source juridique', record['source'])
     line('Observation juridique', record['remarque'])
     if st.session_state.get('v30_origin') == origin_key and st.session_state.get('v30_demand'):
-        story.append(Paragraph('Bassins de demande V2.8 (resultats partiels)', styles['Heading2']))
+        story.append(Paragraph('Bassins de demande V3.1 (resultats partiels)', styles['Heading2']))
         for group, result in st.session_state['v30_demand'].items():
             line(group, f"{len(result['rows'])} lieux avec trajet confirme ; statut : {result['status']}")
         line('Methode', 'OpenStreetMap ou Wikidata partiel ; trajet routier OSRM hors trafic ; maximum 60 candidats par bassin')
