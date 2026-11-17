@@ -15,15 +15,26 @@ if not DATA_PATH.exists():
     st.stop()
 DATA = json.loads(DATA_PATH.read_text(encoding='utf-8'))
 CITIES = {row['ville']: row for row in DATA}
-st.title('🏠 Zero to Host — V2.5 pilote')
-st.caption('Carte, adresses, trajets, comparaison des villes et rapport PDF · sans dépendance à Overpass')
+st.title('🏠 Zero to Host — V2.6 pilote')
+st.caption('Recherche libre en Allemagne, carte, trajets pilotes, Wikidata, réglementation et PDF · sans Overpass')
 st.warning('Prototype autonome : ne remplace pas votre application actuelle. Ne constitue pas un avis juridique.')
-city = st.selectbox('Choisir une ville', sorted(CITIES))
+mode = st.radio('Mode de recherche', ['Ville enregistrée', 'Saisir librement une ville allemande'], horizontal=True)
+if mode == 'Ville enregistrée':
+    city = st.selectbox('Choisir une ville', sorted(CITIES))
+else:
+    city = st.text_input('Ville allemande à analyser', placeholder='Ex. München, Essen, Saarbrücken').strip()
+    if not city:
+        st.info('Saisis une ville allemande pour lancer son analyse.')
+        st.stop()
 address = st.text_input('Adresse du bien (facultative)', placeholder='Rue et numéro, code postal')
-record = CITIES[city]
+record = CITIES.get(city, {
+    'ville': city, 'region': 'Allemagne', 'statut': 'À confirmer auprès de la mairie',
+    'satzung': 'Non vérifiée', 'source': '', 'date_verification': 'Non vérifiée',
+    'remarque': 'Aucune vérification juridique pour cette commune. Contacter la mairie et le Bauamt avant toute décision.'
+})
 
-st.subheader('🗺️ Carte interactive — Leonberg, Ditzingen et Rutesheim')
-st.caption('Les marqueurs de ville sont approximatifs. Les durées routières vers les trois centres sont calculables plus bas ; ce n’est pas une zone exhaustive de 20 minutes.')
+st.subheader('🗺️ Carte interactive — recherche dans toute l’Allemagne')
+st.caption('Les trois marqueurs pilotes sont indicatifs. La ville recherchée est géocodée via Photon ; les trajets proposés ne constituent pas une zone exhaustive de 20 minutes.')
 # Coordonnées indicatives des centres-villes. Aucune donnée POI n'est inventée.
 PILOT_CENTERS = {
     'Leonberg': (48.8015, 9.0161),
@@ -49,16 +60,25 @@ def geocode_address(query):
         lon, lat = feature['geometry']['coordinates']
         props = feature.get('properties', {})
         place = ', '.join(str(props[k]) for k in ('name', 'street', 'housenumber', 'city', 'postcode') if props.get(k))
-        return {'lat': float(lat), 'lon': float(lon), 'label': place or 'Résultat du géocodeur', 'house': str(props.get('housenumber', '')).strip(), 'street': str(props.get('street', '')).strip(), 'city': str(props.get('city', '')).strip()}
+        return {'lat': float(lat), 'lon': float(lon), 'label': place or 'Résultat du géocodeur', 'house': str(props.get('housenumber', '')).strip(), 'street': str(props.get('street', '')).strip(), 'city': str(props.get('city', '')).strip(), 'countrycode': str(props.get('countrycode', '')).lower()}
     except (requests.RequestException, ValueError, KeyError, IndexError, TypeError):
         return None
 
+# Ne jamais utiliser Leonberg comme position de secours pour une autre ville.
 if city in PILOT_CENTERS:
     center = PILOT_CENTERS[city]
+    city_label = city
 else:
-    center = PILOT_CENTERS['Leonberg']
+    with st.spinner('Localisation de la commune…'):
+        located_city = geocode_address(f'{city}, Deutschland')
+    if not located_city or located_city.get('countrycode') != 'de':
+        st.error('Commune non localisée avec certitude en Allemagne. Vérifie son nom et réessaie ; aucune analyse ne sera faite à partir de Leonberg.')
+        st.stop()
+    city_label = located_city['label']
+    center = (located_city['lat'], located_city['lon'])
+    st.info(f'Position approximative de la commune : {city_label}. Vérifie la carte avant de continuer.')
 
-points = [
+points = [{'lat': center[0], 'lon': center[1], 'lieu': f'Commune recherchée : {city}', 'type': 'Ville recherchée'}] + [
     {'lat': lat, 'lon': lon, 'lieu': f'Centre approximatif : {name}', 'type': 'Centre-ville'}
     for name, (lat, lon) in PILOT_CENTERS.items()
 ]
@@ -68,7 +88,7 @@ if address.strip():
     if st.session_state.get('geocode_request') == (address.strip(), city):
         with st.spinner('Recherche de l’adresse…'):
             found = geocode_address(f'{address.strip()}, {city}, Deutschland')
-        if found:
+        if found and found.get('countrycode') == 'de':
             points.append({'lat': found['lat'], 'lon': found['lon'], 'lieu': f'Adresse recherchée : {found["label"]}', 'type': 'Adresse géocodée'})
             center = (found['lat'], found['lon'])
             requested_house = re.search(r'\b(\d+[a-zA-Z]?)\b', address)
@@ -85,8 +105,8 @@ if address.strip():
 map_data = pd.DataFrame(points)
 st.map(map_data, latitude='lat', longitude='lon', zoom=11, use_container_width=True)
 st.dataframe(map_data[['lieu', 'type']], hide_index=True, use_container_width=True)
-st.subheader('🚗 Temps de trajet routier vers les trois centres pilotes')
-st.caption('Trajet calculé par le service public OSRM depuis le point géocodé (si trouvé), sinon depuis le centre approximatif de la ville. Durées indicatives hors trafic, pas une isochrone exhaustive de 20 minutes.')
+st.subheader('🚗 Temps de trajet vers les trois centres pilotes')
+st.caption('OSRM calcule les trajets depuis la ville ou adresse choisie uniquement vers Leonberg, Ditzingen et Rutesheim, même si la recherche porte sur une autre région. Ce n’est PAS une recherche des villes voisines en 20 minutes. Durées sans trafic.')
 @st.cache_data(ttl=3600, show_spinner=False)
 def route_to_centers(start_lat, start_lon):
     coords = ';'.join([f'{start_lon},{start_lat}'] + [f'{lon},{lat}' for lat, lon in PILOT_CENTERS.values()])
@@ -226,8 +246,8 @@ with st.expander('Option complémentaire : importer des lieux vérifiés par CSV
 
 # V2.5 : comparer les sources documentaires sans confondre couverture et potentiel Airbnb.
 st.divider()
-st.subheader('📊 Comparaison des trois villes — infrastructures documentées')
-st.caption('Wikidata est partiel. Les fiches et catégories identifiées ne constituent ni un indice de demande Airbnb, ni une note d’investissement. Le même rayon est appliqué aux trois villes.')
+st.subheader('📊 Comparaison des trois villes pilotes — infrastructures documentées')
+st.caption('Cette comparaison concerne uniquement Leonberg, Ditzingen et Rutesheim, indépendamment de la ville librement recherchée. Wikidata est partiel et ne mesure pas la demande Airbnb.')
 CATEGORY_WEIGHTS = {'Hôpital': 20, 'Gare ferroviaire': 25, 'Hôtel': 15, 'Université': 15, 'Musée': 10, 'Attraction touristique': 15}
 
 def distance_km(lat1, lon1, lat2, lon2):
@@ -297,7 +317,10 @@ if address:
     st.write('**Adresse à examiner :**', address)
 st.write('**Observation :**', record['remarque'])
 st.write('**Vérification documentaire :**', record['date_verification'])
-st.markdown(f"**Source :** [ouvrir la source]({record['source']})")
+if record.get('source'):
+    st.markdown(f"**Source :** [ouvrir la source]({record['source']})")
+else:
+    st.warning('Aucune source juridique communale vérifiée pour cette ville. Statut inconnu, pas autorisé par défaut.')
 st.divider()
 st.subheader('Checklist avant de signer le bail')
 for item in [
@@ -339,7 +362,7 @@ def build_pdf_report():
     output = io.BytesIO()
     doc = SimpleDocTemplate(output, pagesize=(595, 842), rightMargin=42, leftMargin=42, topMargin=45, bottomMargin=45)
     styles = getSampleStyleSheet()
-    story = [Paragraph('Zero to Host - Rapport de localisation V2.5', styles['Title']), Spacer(1, 12)]
+    story = [Paragraph('Zero to Host - Rapport de localisation V2.6', styles['Title']), Spacer(1, 12)]
     def line(label, value):
         story.append(Paragraph(f'<b>{escape(str(label))} :</b> {escape(str(value))}', styles['BodyText']))
         story.append(Spacer(1, 6))
@@ -377,7 +400,7 @@ def build_pdf_report():
 
 try:
     pdf_bytes = build_pdf_report()
-    st.download_button('📄 Télécharger le rapport PDF V2.5', pdf_bytes, file_name=f'zero_to_host_v25_{city.lower()}.pdf', mime='application/pdf')
+    st.download_button('📄 Télécharger le rapport PDF V2.6', pdf_bytes, file_name=f'zero_to_host_v26_{re.sub(r'[^a-z0-9_-]', '_', city.lower())}.pdf', mime='application/pdf')
 except ImportError:
     st.error('Pour activer le PDF, ajoute reportlab dans requirements.txt de ton dépôt GitHub.')
 except Exception as exc:
