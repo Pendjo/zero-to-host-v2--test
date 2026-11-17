@@ -15,7 +15,7 @@ if not DATA_PATH.exists():
     st.stop()
 DATA = json.loads(DATA_PATH.read_text(encoding='utf-8'))
 CITIES = {row['ville']: row for row in DATA}
-st.title('🏠 Zero to Host — V2.6 pilote')
+st.title('🏠 Zero to Host — V2.6.1 pilote')
 st.caption('Recherche libre en Allemagne, carte, trajets pilotes, Wikidata, réglementation et PDF · sans Overpass')
 st.warning('Prototype autonome : ne remplace pas votre application actuelle. Ne constitue pas un avis juridique.')
 mode = st.radio('Mode de recherche', ['Ville enregistrée', 'Saisir librement une ville allemande'], horizontal=True)
@@ -34,7 +34,7 @@ record = CITIES.get(city, {
 })
 
 st.subheader('🗺️ Carte interactive — recherche dans toute l’Allemagne')
-st.caption('Les trois marqueurs pilotes sont indicatifs. La ville recherchée est géocodée via Photon ; les trajets proposés ne constituent pas une zone exhaustive de 20 minutes.')
+st.caption('La carte affiche uniquement la commune recherchée et, si disponible, l’adresse du bien. Les trajets pilotes ne constituent pas une zone exhaustive de 20 minutes.')
 # Coordonnées indicatives des centres-villes. Aucune donnée POI n'est inventée.
 PILOT_CENTERS = {
     'Leonberg': (48.8015, 9.0161),
@@ -78,10 +78,7 @@ else:
     center = (located_city['lat'], located_city['lon'])
     st.info(f'Position approximative de la commune : {city_label}. Vérifie la carte avant de continuer.')
 
-points = [{'lat': center[0], 'lon': center[1], 'lieu': f'Commune recherchée : {city}', 'type': 'Ville recherchée'}] + [
-    {'lat': lat, 'lon': lon, 'lieu': f'Centre approximatif : {name}', 'type': 'Centre-ville'}
-    for name, (lat, lon) in PILOT_CENTERS.items()
-]
+points = [{'lat': center[0], 'lon': center[1], 'lieu': f'Commune recherchée : {city}', 'type': 'Ville recherchée'}]
 if address.strip():
     if st.button('📍 Localiser cette adresse sur la carte'):
         st.session_state['geocode_request'] = (address.strip(), city)
@@ -100,10 +97,11 @@ if address.strip():
             else:
                 st.info(f'Résultat de géocodage : {found["label"]}. Correspondance exacte non garantie.')
         else:
-            st.warning('Adresse non trouvée ou service temporairement indisponible. La carte des trois communes reste accessible.')
+            st.warning('Adresse non trouvée ou service temporairement indisponible. La carte de la commune reste accessible.')
 
 map_data = pd.DataFrame(points)
 st.map(map_data, latitude='lat', longitude='lon', zoom=11, use_container_width=True)
+st.caption(f'Point de référence utilisé : latitude {center[0]:.5f}, longitude {center[1]:.5f}.')
 st.dataframe(map_data[['lieu', 'type']], hide_index=True, use_container_width=True)
 st.subheader('🚗 Temps de trajet vers les trois centres pilotes')
 st.caption('OSRM calcule les trajets depuis la ville ou adresse choisie uniquement vers Leonberg, Ditzingen et Rutesheim, même si la recherche porte sur une autre région. Ce n’est PAS une recherche des villes voisines en 20 minutes. Durées sans trafic.')
