@@ -1,1 +1,29 @@
-
+name: Test Overture Tiefenbronn (sans API payante)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  overture-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Installer Overture CLI
+        run: python -m pip install --upgrade overturemaps
+      - name: Télécharger les lieux Overture autour de Tiefenbronn
+        run: |
+          mkdir -p output
+          overturemaps download --bbox=8.60,48.72,8.95,48.88 -f geojson --type=place -o output/overture_tiefenbronn.geojson
+      - name: Fusionner avec la base actuelle (sans modifier GitHub)
+        run: |
+          python fusion_overture.py data/lieux_allemagne.csv output/overture_tiefenbronn.geojson output/lieux_allemagne_test.csv | tee output/rapport_fusion.json
+      - name: Conserver les résultats à télécharger
+        uses: actions/upload-artifact@v4
+        with:
+          name: overture-tiefenbronn-resultats
+          path: output/
+          retention-days: 7
