@@ -1,4 +1,4 @@
-"""Zero to Host V3.8 — base régionale et compléments Overture, contrôle de couverture."""
+"""Zero to Host V3.9 — base régionale et compléments Overture, contrôle de couverture."""
 import json
 import io
 import re
@@ -16,7 +16,7 @@ if not DATA_PATH.exists():
     st.stop()
 DATA = json.loads(DATA_PATH.read_text(encoding='utf-8'))
 CITIES = {row['ville']: row for row in DATA}
-st.title('🏠 Zero to Host — V3.8')
+st.title('🏠 Zero to Host — V3.9')
 st.caption('Recherche libre, zones accessibles en voiture, Wikidata, réglementation, rentabilité et PDF')
 st.warning('Prototype autonome : ne remplace pas votre application actuelle. Ne constitue pas un avis juridique.')
 mode = st.radio('Mode de recherche', ['Ville enregistrée', 'Saisir librement une ville allemande'], horizontal=True)
@@ -510,43 +510,51 @@ def correct_category(place):
 
 
 def prioritize_local_candidates(candidates, cap=300, group='Professionnel (15 min)'):
-    """Priorité à la proximité et aux entreprises; repli Wikidata ensuite.
+    """Sélection diversifiée, proche et reproductible; jamais un inventaire exhaustif.
 
-    Les quotas empêchent les zones industrielles de masquer les entreprises.
-    Ce n'est pas une recherche exhaustive.
+    Les quotas sont des réservations minimales quand les catégories existent,
+    pas des maxima: les places libres sont réattribuées par proximité.
     """
-    candidates = [correct_category(p) for p in candidates]
-    local = [p for p in candidates if str(p.get('Fiabilité', '')).startswith('Base locale')]
-    remote = [p for p in candidates if not str(p.get('Fiabilité', '')).startswith('Base locale')]
-    def ordered(pool):
-        if not group.startswith('Professionnel'):
-            return sorted(pool, key=lambda p: p['Distance directe (km)'])
-        def rank(p):
-            cat = str(p.get('Catégorie', '')).casefold()
-            if 'entreprise' in cat: tier = 0
-            elif any(x in cat for x in ('hôpital', 'université', 'recherche')): tier = 1
-            elif 'gewerbegebiet' in cat or 'zone d’activité' in cat: tier = 2
-            else: tier = 3
-            # Proximity remains decisive within each tier.
-            return (tier, p['Distance directe (km)'])
-        return sorted(pool, key=rank)
+    cleaned = [correct_category(p) for p in candidates]
+    def order(p):
+        local = not str(p.get('Fiabilité', '')).startswith('Base locale')
+        return (local, float(p.get('Distance directe (km)', 9999)), str(p.get('Nom', '')))
     if not group.startswith('Professionnel'):
-        return (ordered(local) + ordered(remote))[:cap]
-    # Reserve at most 20% of the evaluation capacity for Gewerbegebiete;
-    # each industrial area is a context indicator, not an individual employer.
-    result = []
-    zone_limit = max(1, cap // 5)
-    zones = 0
-    for p in ordered(local) + ordered(remote):
+        return sorted(cleaned, key=order)[:cap]
+
+    def bucket(p):
         cat = str(p.get('Catégorie', '')).casefold()
-        zone = 'gewerbegebiet' in cat or 'zone d’activité' in cat
-        if zone and zones >= zone_limit:
-            continue
-        result.append(p)
-        zones += int(zone)
-        if len(result) == cap:
-            break
-    return result
+        if 'site technique' in cat:
+            return 'technique'
+        if any(t in cat for t in ('hôpital', 'université', 'recherche', 'laboratoire')):
+            return 'institutions'
+        if any(t in cat for t in ('gewerbegebiet', 'zone industrielle', 'zone d’activité')):
+            return 'zones'
+        if 'entreprise' in cat:
+            return 'entreprises'
+        return 'autres'
+
+    pools = {k: [] for k in ('entreprises', 'zones', 'institutions', 'autres', 'technique')}
+    for p in cleaned:
+        pools[bucket(p)].append(p)
+    for pool in pools.values():
+        pool.sort(key=order)
+    # Réservations pour que les zones et les institutions restent visibles.
+    targets = {'entreprises': int(cap * .50), 'zones': int(cap * .20),
+               'institutions': int(cap * .10)}
+    selected = []
+    for k, n in targets.items():
+        take = min(n, len(pools[k]), cap - len(selected))
+        selected.extend(pools[k][:take])
+        pools[k] = pools[k][take:]
+    # Redistribuer les places disponibles à tous les types utiles par proximité.
+    # Les sites techniques sont conservés pour diagnostic, mais pas prioritaires.
+    remaining = sorted(pools['entreprises'] + pools['zones'] +
+                       pools['institutions'] + pools['autres'], key=order)
+    selected.extend(remaining[:cap - len(selected)])
+    if len(selected) < cap:
+        selected.extend(pools['technique'][:cap - len(selected)])
+    return selected[:cap]
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -657,7 +665,7 @@ def local_demand_places(lat, lon, group):
                           'Fiabilité': 'Base locale — activité non vérifiée'})
     return sorted(found, key=lambda x: x['Distance directe (km)']), f'Base locale : {len(found)} lieux dans le rayon ({len(subset)} fiches pour cette clientèle)'
 
-st.caption('V3.8 : sélection automatique des candidats les plus proches, avec priorité aux établissements professionnels. Base actuelle : OSM + Wikidata ; Overture non encore intégré.')
+st.caption('V3.9 : sélection équilibrée entre entreprises, Gewerbegebiete et établissements institutionnels. Base actuelle : OSM + Wikidata ; Overture non encore intégré.')
 MAX_ROUTE_CANDIDATES = 300
 st.caption('Contrôle automatique : jusqu’à 300 candidats par clientèle. Ce plafond protège le service de calcul routier ; l’analyse reste partielle.')
 with st.expander('📂 Base de lieux locale — fonctionnement V3.4', expanded=False):
@@ -745,7 +753,7 @@ if st.session_state.get('v34_origin') == (city, origin_key, MAX_ROUTE_CANDIDATES
         for diagnostic in st.session_state.get('overpass_v34_results', []):
             st.write('• ' + diagnostic)
 
-    st.caption('Un lieu référencé est un indice de contexte, pas une preuve de nuitées vendues. La base locale ne garantit pas l’activité actuelle. Les trajets OSRM sont hors trafic.')
+    st.caption('Échantillon de 300 candidats maximum par clientèle : les chiffres ne sont pas exhaustifs. Un lieu référencé est un indice de contexte, pas une preuve de nuitées vendues. La base locale ne garantit pas l’activité actuelle. Les trajets OSRM sont hors trafic.')
     tab_pro, tab_tour = st.tabs(['🏭 Monteure & Geschäftsreisende · 15 min',
                                 '🎪 Touristes, familles & événements · 50 min'])
     for tab, group in zip((tab_pro, tab_tour), DEMAND_GROUPS):
@@ -756,7 +764,7 @@ if st.session_state.get('v34_origin') == (city, origin_key, MAX_ROUTE_CANDIDATES
                 st.caption('Cibles : entreprises, zones d’activité, hôpitaux, universités et recherche. Les emplois, chantiers et déplacements professionnels ne sont pas mesurés.')
             else:
                 st.caption('Cibles : salons, congrès, spectacles, attractions et loisirs. Les événements programmés et leur fréquentation ne sont pas vérifiés.')
-            with st.expander('🔧 Diagnostic des services (V3.7)', expanded=result.get('status') != 'Partiel'):
+            with st.expander('🔧 Diagnostic des services (V3.9)', expanded=result.get('status') != 'Partiel'):
                 for message in result.get('diagnostics', []):
                     st.write('• ' + message)
                 if not result.get('diagnostics'):
