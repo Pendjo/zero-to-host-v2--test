@@ -1,4 +1,4 @@
-"""Zero to Host V3.6 — analyse séparée des clientèles et diagnostic des sources."""
+"""Zero to Host V3.7 — base régionale et compléments Overture, contrôle de couverture."""
 import json
 import io
 import re
@@ -9,14 +9,14 @@ import logging
 from pathlib import Path
 import streamlit as st
 
-st.set_page_config(page_title="Zero to Host | V3.6", page_icon="🏠", layout="wide")
+st.set_page_config(page_title="Zero to Host | V3.7", page_icon="🏠", layout="wide")
 DATA_PATH = Path(__file__).parent / 'data' / 'villes.json'
 if not DATA_PATH.exists():
     st.error('Fichier manquant : data/villes.json. Conserve le dossier data de la V2.3 dans ton dépôt GitHub.')
     st.stop()
 DATA = json.loads(DATA_PATH.read_text(encoding='utf-8'))
 CITIES = {row['ville']: row for row in DATA}
-st.title('🏠 Zero to Host — V3.6')
+st.title('🏠 Zero to Host — V3.7')
 st.caption('Recherche libre, zones accessibles en voiture, Wikidata, réglementation, rentabilité et PDF')
 st.warning('Prototype autonome : ne remplace pas votre application actuelle. Ne constitue pas un avis juridique.')
 mode = st.radio('Mode de recherche', ['Ville enregistrée', 'Saisir librement une ville allemande'], horizontal=True)
@@ -498,7 +498,7 @@ def balanced_candidates(candidates, cap=60):
 def prioritize_local_candidates(candidates, cap=60):
     """V3.6: proches d'abord, avec un quota de diversité; CSV avant Wikidata.
 
-    Les 60 trajets restent un échantillon, pas un inventaire exhaustif.
+    Les trajets restent un échantillon, pas un inventaire exhaustif.
     """
     local = [p for p in candidates if str(p.get('Fiabilité', '')).startswith('Base locale')]
     remote = [p for p in candidates if not str(p.get('Fiabilité', '')).startswith('Base locale')]
@@ -585,6 +585,8 @@ def audience_category(place, group):
 # V3.4 : base locale facultative. Elle ne dépend pas du réseau Overpass.
 # Un export OSM régional doit être préparé hors de Streamlit puis placé dans data/.
 LOCAL_PLACES_PATH = Path(__file__).parent / 'data' / 'lieux_allemagne.csv'
+# Les données Overture sont fusionnées hors ligne dans ce même fichier CSV.
+# Aucun téléchargement volumineux ni API payante n'est lancé depuis Streamlit.
 LOCAL_COLUMNS = {'nom', 'categorie', 'lat', 'lon', 'source', 'public_cible'}
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -623,7 +625,8 @@ def local_demand_places(lat, lon, group):
                           'Fiabilité': 'Base locale — activité non vérifiée'})
     return sorted(found, key=lambda x: x['Distance directe (km)']), f'Base locale : {len(found)} lieux dans le rayon ({len(subset)} fiches pour cette clientèle)'
 
-st.caption('V3.6 : recherche principale depuis une base CSV locale si elle existe, avec complément Wikidata. Aucun appel Overpass pendant la recherche normale.')
+st.caption('V3.7 : base CSV locale (OSM et éventuel complément Overture), puis Wikidata. La couverture des entreprises reste partielle.')
+MAX_ROUTE_CANDIDATES = st.slider('Nombre maximum de lieux à contrôler par clientèle', min_value=60, max_value=300, value=200, step=20, help='Plus de lieux = meilleure couverture potentielle, mais calcul routier plus lent. Les résultats ne sont jamais exhaustifs.')
 with st.expander('📂 Base de lieux locale — fonctionnement V3.4', expanded=False):
     st.write('Dépose un fichier `data/lieux_allemagne.csv` dans GitHub pour alimenter la recherche sans Overpass. Le fichier peut contenir des établissements de plusieurs régions allemandes.')
     st.write('Colonnes : `nom,categorie,lat,lon,source,public_cible` ; public_cible = `professionnel` ou `tourisme`. Les coordonnées doivent être réelles et les sources vérifiables.')
@@ -639,7 +642,7 @@ if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='deman
         for group, config in DEMAND_GROUPS.items():
             candidates, local_message = local_demand_places(*origin_key, group)
             diagnostics = [local_message]
-            source_name = 'Base locale + Wikidata' if candidates else 'Wikidata (base locale vide ou absente)'
+            source_name = 'Base locale (OSM/Overture si fusionné) + Wikidata' if candidates else 'Wikidata (base locale vide ou absente)'
             wikidata_candidates, fallback_diagnostics = discover_demand_places(*origin_key, group)
             diagnostics += fallback_diagnostics
             if wikidata_candidates:
@@ -655,7 +658,7 @@ if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='deman
             if not candidates:
                 report[group] = {'status': 'Aucun lieu documenté trouvé', 'rows': [], 'diagnostics': diagnostics}
                 continue
-            selected = prioritize_local_candidates(candidates, cap=60)
+            selected = prioritize_local_candidates(candidates, cap=MAX_ROUTE_CANDIDATES)
             local_tested = sum(str(p.get("Fiabilité", "")).startswith("Base locale") for p in selected)
             diagnostics.append(f"Sélection : {local_tested} fiches locales prioritaires sur {len(selected)} candidats testés")
             minutes, routing_diagnostics = driving_minutes_to_places(*origin_key,
@@ -696,9 +699,9 @@ if st.button('🔎 Rechercher les bassins de demande (15 et 50 min)', key='deman
                              'checked_rows': checked_rows,
                              'diagnostics': diagnostics}
     st.session_state['v34_demand'] = report
-    st.session_state['v34_origin'] = (city, origin_key)
+    st.session_state['v34_origin'] = (city, origin_key, MAX_ROUTE_CANDIDATES)
 
-if st.session_state.get('v34_origin') == (city, origin_key) and st.session_state.get('v34_demand'):
+if st.session_state.get('v34_origin') == (city, origin_key, MAX_ROUTE_CANDIDATES) and st.session_state.get('v34_demand'):
     report = st.session_state['v34_demand']
     st.markdown('### Deux clientèles, deux analyses distinctes')
     with st.expander('🧪 Diagnostic réseau Overpass V3.4 — GET / POST', expanded=False):
@@ -720,7 +723,7 @@ if st.session_state.get('v34_origin') == (city, origin_key) and st.session_state
                 st.caption('Cibles : entreprises, zones d’activité, hôpitaux, universités et recherche. Les emplois, chantiers et déplacements professionnels ne sont pas mesurés.')
             else:
                 st.caption('Cibles : salons, congrès, spectacles, attractions et loisirs. Les événements programmés et leur fréquentation ne sont pas vérifiés.')
-            with st.expander('🔧 Diagnostic des services (V3.6)', expanded=result.get('status') != 'Partiel'):
+            with st.expander('🔧 Diagnostic des services (V3.7)', expanded=result.get('status') != 'Partiel'):
                 for message in result.get('diagnostics', []):
                     st.write('• ' + message)
                 if not result.get('diagnostics'):
@@ -728,7 +731,7 @@ if st.session_state.get('v34_origin') == (city, origin_key) and st.session_state
             if result.get('status') != 'Partiel':
                 st.warning(result.get('status', 'Résultats indisponibles') + ' : aucun résultat ne peut être confirmé.')
                 continue
-            st.caption(f"Source : {result['source']} · {result['tested']} candidats évalués sur {result['candidates']} trouvés (maximum 60). Résultats partiels.")
+            st.caption(f"Source : {result['source']} · {result['tested']} candidats évalués sur {result['candidates']} trouvés (plafond {MAX_ROUTE_CANDIDATES}). Résultats partiels.")
             st.info(f"Base locale : {result.get('local_within', 0)} lieu(x) à {DEMAND_GROUPS[group]['minutes']} min maximum en voiture ; {result.get('local_outside', 0)} au-delà. Ce décompte ne mesure pas la demande Airbnb.")
             if result.get('checked_rows'):
                 with st.expander('🔎 Voir les candidats évalués et exclus', expanded=False):
@@ -882,11 +885,11 @@ def build_pdf_report():
     line('Verification documentaire', record['date_verification'])
     line('Source juridique', record['source'])
     line('Observation juridique', record['remarque'])
-    if st.session_state.get('v34_origin') == (city, origin_key) and st.session_state.get('v34_demand'):
+    if st.session_state.get('v34_origin') == (city, origin_key, MAX_ROUTE_CANDIDATES) and st.session_state.get('v34_demand'):
         story.append(Paragraph('Bassins de demande V3.4 (resultats partiels)', styles['Heading2']))
         for group, result in st.session_state['v34_demand'].items():
             line(group, f"{len(result['rows'])} lieux avec trajet confirme ; statut : {result['status']}")
-        line('Methode', 'Base locale facultative et Wikidata partiel ; trajet routier OSRM hors trafic ; maximum 60 candidats par bassin')
+        line('Methode', 'Base locale facultative et Wikidata partiel ; trajet routier OSRM hors trafic ; nombre de candidats paramétrable par bassin')
     story.append(Spacer(1, 10))
     story.append(Paragraph('Hypotheses de rentabilite', styles['Heading2']))
     for label, val in [
